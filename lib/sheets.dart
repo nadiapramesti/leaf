@@ -119,6 +119,12 @@ class _NoteSheetState extends State<_NoteSheet> {
   bool _pad = false;
 
   @override
+  void initState() {
+    super.initState();
+    InkEngine.warmIfReady(Store.sp.getString('ink_lang') ?? 'id');
+  }
+
+  @override
   void dispose() {
     _ctrl.dispose();
     super.dispose();
@@ -288,31 +294,15 @@ class _ConvertSheetState extends State<_ConvertSheet> {
       _status = 'Membaca tulisan…';
     });
     try {
-      final mm = mk.DigitalInkRecognizerModelManager();
-      if (!await mm.isModelDownloaded(_lang)) {
-        if (mounted) setState(() => _status = 'Mengunduh model bahasa (sekali aja)…');
-        await mm.downloadModel(_lang, isWifiRequired: false);
+      if (!await InkEngine.isDownloaded(_lang) && mounted) {
+        setState(() => _status = 'Mengunduh model bahasa (sekali aja)…');
       }
-      final ink = mk.Ink();
-      for (final s in widget.strokes) {
-        final st = mk.Stroke();
-        for (var i = 0; i < s.pts.length; i++) {
-          st.points.add(mk.StrokePoint(
-            x: s.pts[i].dx * widget.size.width,
-            y: s.pts[i].dy * widget.size.height,
-            t: s.ts[i],
-          ));
-        }
-        ink.strokes.add(st);
-      }
-      final rec = mk.DigitalInkRecognizer(languageCode: _lang);
-      final cands = await rec.recognize(ink);
-      await rec.close();
+      final text = await recognizeInk(widget.strokes, widget.size, _lang);
       if (!mounted) return;
       setState(() {
-        _ctrl.text = cands.isNotEmpty ? cands.first.text : '';
+        _ctrl.text = text;
         _loading = false;
-        if (cands.isEmpty) _error = 'Tulisan belum kebaca. Ketik manual aja di bawah.';
+        if (text.isEmpty) _error = 'Tulisan belum kebaca. Ketik manual aja di bawah.';
       });
     } catch (e) {
       if (!mounted) return;
@@ -427,11 +417,49 @@ class _ConvertSheetState extends State<_ConvertSheet> {
 
 // ------------------------------------------------------------------ pengenal tulisan
 
-Future<String> recognizeInk(List<InkStroke> strokes, Size size, String lang) async {
-  final mm = mk.DigitalInkRecognizerModelManager();
-  if (!await mm.isModelDownloaded(lang)) {
-    await mm.downloadModel(lang, isWifiRequired: false);
+/// Mesin pengenal tulisan disiapkan sekali per bahasa, lalu dipakai ulang (biar cepat).
+class InkEngine {
+  static final Map<String, mk.DigitalInkRecognizer> _rec = {};
+  static final Map<String, Future<void>> _ready = {};
+
+  static Future<bool> isDownloaded(String lang) =>
+      mk.DigitalInkRecognizerModelManager().isModelDownloaded(lang);
+
+  static Future<void> warm(String lang) {
+    return _ready.putIfAbsent(lang, () async {
+      try {
+        final mm = mk.DigitalInkRecognizerModelManager();
+        if (!await mm.isModelDownloaded(lang)) {
+          await mm.downloadModel(lang, isWifiRequired: false);
+        }
+        final r = mk.DigitalInkRecognizer(languageCode: lang);
+        // pancingan kecil supaya model langsung dimuat ke memori
+        final ink = mk.Ink();
+        final st = mk.Stroke();
+        st.points.add(mk.StrokePoint(x: 0, y: 0, t: 0));
+        st.points.add(mk.StrokePoint(x: 10, y: 10, t: 20));
+        ink.strokes.add(st);
+        try {
+          await r.recognize(ink);
+        } catch (_) {}
+        _rec[lang] = r;
+      } catch (e) {
+        _ready.remove(lang);
+        rethrow;
+      }
+    });
   }
+
+  /// siapkan diam-diam kalau modelnya sudah ada di HP (tanpa unduh)
+  static Future<void> warmIfReady(String lang) async {
+    try {
+      if (await isDownloaded(lang)) await warm(lang);
+    } catch (_) {}
+  }
+}
+
+Future<String> recognizeInk(List<InkStroke> strokes, Size size, String lang) async {
+  await InkEngine.warm(lang);
   final ink = mk.Ink();
   for (final s in strokes) {
     final st = mk.Stroke();
@@ -444,13 +472,8 @@ Future<String> recognizeInk(List<InkStroke> strokes, Size size, String lang) asy
     }
     ink.strokes.add(st);
   }
-  final rec = mk.DigitalInkRecognizer(languageCode: lang);
-  try {
-    final c = await rec.recognize(ink);
-    return c.isNotEmpty ? c.first.text : '';
-  } finally {
-    await rec.close();
-  }
+  final c = await InkEngine._rec[lang]!.recognize(ink);
+  return c.isNotEmpty ? c.first.text : '';
 }
 
 /// Papan tulis tangan: tulis pakai stylus/jari, jeda sebentar, otomatis jadi teks.
@@ -472,6 +495,30 @@ class _HandwritingPadState extends State<HandwritingPad> {
   String? _msg;
   Size _size = const Size(1, 1);
   String _lang = Store.sp.getString('ink_lang') ?? 'id';
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+  }
+
+  Future<void> _prepare() async {
+    setState(() => _ready = false);
+    final lang = _lang;
+    try {
+      final had = await InkEngine.isDownloaded(lang);
+      if (!had && mounted) setState(() => _msg = 'Mengunduh model bahasa (sekali aja)…');
+      await InkEngine.warm(lang);
+      if (!mounted || lang != _lang) return;
+      setState(() {
+        _ready = true;
+        if (!had) _msg = null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _msg = 'Pertama kali butuh internet buat unduh model bahasa');
+    }
+  }
 
   @override
   void dispose() {
@@ -506,7 +553,7 @@ class _HandwritingPadState extends State<HandwritingPad> {
       if (s != null && s.pts.length > 1) _strokes.add(s);
     });
     _wait?.cancel();
-    _wait = Timer(const Duration(milliseconds: 1100), _recognize);
+    _wait = Timer(const Duration(milliseconds: 650), _recognize);
   }
 
   Future<void> _recognize() async {
@@ -574,7 +621,7 @@ class _HandwritingPadState extends State<HandwritingPad> {
                             textAlign: TextAlign.center,
                             style: TextStyle(color: p.muted, fontSize: 15)),
                       ),
-                    if (_busy)
+                    if (_busy || !_ready)
                       Positioned(
                         top: 10,
                         right: 10,
@@ -604,6 +651,7 @@ class _HandwritingPadState extends State<HandwritingPad> {
                   onSelected: (_) {
                     setState(() => _lang = e.key);
                     Store.sp.setString('ink_lang', e.key);
+                    _prepare();
                   },
                 ),
               ),

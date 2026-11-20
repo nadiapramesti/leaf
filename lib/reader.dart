@@ -874,7 +874,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             const SizedBox(width: 8),
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: () => setState(() => _mode = Mode.pen),
+                onPressed: () {
+                  setState(() => _mode = Mode.pen);
+                  InkEngine.warmIfReady(Store.sp.getString('ink_lang') ?? 'id');
+                },
                 icon: const Icon(Icons.draw_rounded, size: 18),
                 label: const Text('Tulis'),
                 style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
