@@ -1,0 +1,22 @@
+name: leaf
+description: Pembaca buku PDF dengan efek balik halaman, sticky note, dan tab penanda.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  pdfx: ^2.9.0
+  page_flip: ^0.2.5
+  file_picker: ^8.1.2
+  shared_preferences: ^2.3.2
+  path_provider: ^2.1.4
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
