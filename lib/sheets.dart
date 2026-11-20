@@ -146,7 +146,7 @@ class _NoteSheetState extends State<_NoteSheet> {
   Widget build(BuildContext context) {
     final p = Pal.of(context);
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.of(context).viewInsets.bottom + 20),
+      padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom + 20),
       child: SingleChildScrollView(
         physics: _pad ? const NeverScrollableScrollPhysics() : null,
         child: Column(
@@ -317,7 +317,7 @@ class _ConvertSheetState extends State<_ConvertSheet> {
   Widget build(BuildContext context) {
     final p = Pal.of(context);
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.of(context).viewInsets.bottom + 20),
+      padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom + 20),
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,

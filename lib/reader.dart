@@ -43,6 +43,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   List<InkStroke> _ink = [];
 
   Mode _mode = Mode.read;
+  int _hl = Store.sp.getInt('hl_color') ?? highlightColors.first;
   bool _stylusSeen = false;
   InkStroke? _live;
   int? _livePointer;
@@ -404,7 +405,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       builder: (ctx) {
         final p = Pal.of(ctx);
         return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          padding: EdgeInsets.fromLTRB(20, 0, 20, 24 + MediaQuery.of(ctx).viewPadding.bottom),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -501,7 +502,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         return ValueListenableBuilder<int>(
           valueListenable: Store.paper,
           builder: (_, mode, __) => Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            padding: EdgeInsets.fromLTRB(20, 0, 20, 24 + MediaQuery.of(ctx).viewPadding.bottom),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -590,7 +591,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     _livePointer = e.pointer;
     setState(() {
-      _live = InkStroke(page: _current, tool: _mode == Mode.pen ? 'pen' : 'hl')
+      _live = InkStroke(
+          page: _current,
+          tool: _mode == Mode.pen ? 'pen' : 'hl',
+          color: _mode == Mode.pen ? null : _hl)
         ..add(_norm(e.localPosition, s), e.timeStamp.inMilliseconds);
     });
   }
@@ -1006,6 +1010,41 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             ),
           ],
         ),
+        if (!pen) ...[
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (final c in highlightColors)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  child: Semantics(
+                    button: true,
+                    selected: _hl == c,
+                    label: 'Warna stabilo',
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: () {
+                        setState(() => _hl = c);
+                        Store.sp.setInt('hl_color', c);
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        width: _hl == c ? 42 : 36,
+                        height: _hl == c ? 42 : 36,
+                        decoration: BoxDecoration(
+                          color: Color(c),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: _hl == c ? p.text : Colors.transparent, width: 3),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
         const SizedBox(height: 6),
         Text(
           _stylusSeen
@@ -1058,7 +1097,7 @@ class _InkPainter extends CustomPainter {
         ..strokeCap = hl ? StrokeCap.square : StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..strokeWidth = hl ? size.width * 0.035 : math.max(2.2, size.width * 0.006)
-        ..color = hl ? const Color(0x66FFD54F) : penColor;
+        ..color = hl ? Color(s.color ?? highlightColors.first).withValues(alpha: 0.42) : penColor;
       Offset at(int i) => Offset(s.pts[i].dx * size.width, s.pts[i].dy * size.height);
       final path = Path()..moveTo(at(0).dx, at(0).dy);
       if (s.pts.length == 1) {

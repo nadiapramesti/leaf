@@ -122,6 +122,15 @@ ThemeData leafTheme(Brightness b) {
 const noteColors = <int>[0xFFFFE27A, 0xFFFFA8BE, 0xFFA9EBC2, 0xFF9FD4FF];
 const noteInk = Color(0xFF2B2614);
 
+const highlightColors = <int>[
+  0xFFFFD54F, // kuning
+  0xFF7CE38B, // hijau
+  0xFFFF8FB1, // pink
+  0xFF6FC3FF, // biru
+  0xFFFFA552, // oranye
+  0xFFB79CFF, // ungu
+];
+
 const fontFamilies = <String, String>{
   'rapi': 'Plus Jakarta Sans',
   'buku': 'Fraunces',
@@ -184,12 +193,13 @@ class Note {
 
 /// Coretan stylus/jari. Titik disimpan relatif (0..1) terhadap halaman.
 class InkStroke {
-  InkStroke({required this.page, required this.tool, List<Offset>? pts, List<int>? ts})
+  InkStroke({required this.page, required this.tool, this.color, List<Offset>? pts, List<int>? ts})
       : pts = pts ?? [],
         ts = ts ?? [];
 
   final int page;
   final String tool; // 'pen' | 'hl'
+  final int? color; // warna stabilo
   final List<Offset> pts;
   final List<int> ts;
 
@@ -201,6 +211,7 @@ class InkStroke {
   Map<String, dynamic> toJson() => {
         'page': page,
         'tool': tool,
+        if (color != null) 'c': color,
         'p': [for (final o in pts) ...[o.dx, o.dy]],
         't': ts,
       };
@@ -214,6 +225,7 @@ class InkStroke {
     return InkStroke(
       page: (j['page'] as num).toInt(),
       tool: '${j['tool']}',
+      color: (j['c'] as num?)?.toInt(),
       pts: pts,
       ts: ts,
     );
@@ -319,6 +331,8 @@ class Store {
       .last
       .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '')
       .replaceAll(RegExp(r'[_\-]+'), ' ')
+      .replaceAll(RegExp(r'^(copy of|salinan)\s+', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\s{2,}'), ' ')
       .trim();
 
   static String? lastOpened() {

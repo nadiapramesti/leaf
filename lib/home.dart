@@ -57,8 +57,9 @@ class _HomePageState extends State<HomePage> {
   Future<void> _bookMenu(String path) async {
     final act = await showModalBottomSheet<String>(
       context: context,
+      useSafeArea: true,
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        padding: EdgeInsets.fromLTRB(20, 0, 20, 24 + MediaQuery.of(ctx).viewPadding.bottom),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -92,10 +93,11 @@ class _HomePageState extends State<HomePage> {
   Future<void> _pickGoal() async {
     final g = await showModalBottomSheet<int>(
       context: context,
+      useSafeArea: true,
       builder: (ctx) {
         final p = Pal.of(ctx);
         return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          padding: EdgeInsets.fromLTRB(20, 0, 20, 24 + MediaQuery.of(ctx).viewPadding.bottom),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -224,7 +226,13 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       body: SafeArea(
         bottom: false,
-        child: _tab == 0 ? _library(p) : _notesTab(p),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 900),
+            child: _tab == 0 ? _library(p) : _notesTab(p),
+          ),
+        ),
       ),
       floatingActionButton: _tab == 0
           ? FloatingActionButton.extended(
@@ -385,13 +393,15 @@ class _HomePageState extends State<HomePage> {
                 : 'Nggak ada buku dengan judul itu.',
           )
         else
-          GridView.count(
-            crossAxisCount: 3,
+          GridView(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
-            crossAxisSpacing: 14,
-            mainAxisSpacing: 18,
-            childAspectRatio: 0.48,
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 160,
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 20,
+              childAspectRatio: 0.5,
+            ),
             children: [
               for (final b in books)
                 InkWell(
