@@ -5,13 +5,13 @@ import 'dart:typed_data';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:page_flip/page_flip.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'extras.dart';
 import 'sheets.dart';
 import 'store.dart';
+import 'turner.dart';
 
 enum Mode { read, pen, highlight }
 
@@ -773,17 +773,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               onPointerUp: (e) => _maybeToggle(e, size),
               child: Stack(
               children: [
-                PageFlipWidget(
+                PageTurner(
                   key: ValueKey(_flipVersion),
-                  backgroundColor: p.readerBg,
-                  initialIndex: _startIndex,
-                  lastPage: _endPage(p),
-                  onPageFlipped: (i) {
+                  count: _count,
+                  initial: _startIndex,
+                  pageBuilder: (i) => _pages[i],
+                  endPage: _endPage(p),
+                  paper: pageBg(Store.paper.value, Theme.of(context).brightness == Brightness.dark),
+                  enabled: _mode == Mode.read,
+                  onChanged: (i) {
                     if (i >= _count) return;
                     setState(() => _current = i);
                     Store.setLastPage(_path, i);
                   },
-                  children: _pages,
                 ),
                 _inkLayer(size, p),
                 ..._noteLayer(size),
