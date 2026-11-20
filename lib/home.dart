@@ -21,6 +21,7 @@ class _HomePageState extends State<HomePage> {
   String _query = '';
   String? _bookFilter;
   String _noteQuery = '';
+  int _view = Store.sp.getInt('shelf_view') ?? 0; // 0 kecil, 1 besar, 2 daftar
   bool _busy = false;
 
   Future<void> _open(String path, {int? page}) async {
@@ -382,6 +383,24 @@ class _HomePageState extends State<HomePage> {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: p.text)),
             ),
             Text('${books.length} buku', style: TextStyle(fontSize: 13, color: p.muted)),
+            const SizedBox(width: 10),
+            SegmentedButton<int>(
+              showSelectedIcon: false,
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              segments: const [
+                ButtonSegment(value: 0, icon: Icon(Icons.apps_rounded), tooltip: 'Kecil'),
+                ButtonSegment(value: 1, icon: Icon(Icons.grid_view_rounded), tooltip: 'Besar'),
+                ButtonSegment(value: 2, icon: Icon(Icons.view_list_rounded), tooltip: 'Daftar'),
+              ],
+              selected: {_view},
+              onSelectionChanged: (v) {
+                setState(() => _view = v.first);
+                Store.sp.setInt('shelf_view', v.first);
+              },
+            ),
           ],
         ),
         const SizedBox(height: 14),
@@ -393,18 +412,13 @@ class _HomePageState extends State<HomePage> {
                 : 'Nggak ada buku dengan judul itu.',
           )
         else
-          GridView(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 160,
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 20,
-              childAspectRatio: 0.5,
-            ),
-            children: [
-              for (final b in books)
-                InkWell(
+          _shelf(p, books),
+      ],
+    );
+  }
+
+  Widget _gridTile(Pal p, String b) {
+    return InkWell(
                   borderRadius: BorderRadius.circular(8),
                   onTap: () => _open(b),
                   onLongPress: () => _bookMenu(b),
@@ -430,10 +444,101 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ],
                   ),
+                );
+  }
+
+  Widget _shelf(Pal p, List<String> books) {
+    if (_view == 2) {
+      return Column(
+        children: [for (final b in books) _listTile(p, b)],
+      );
+    }
+    return GridView(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: _view == 1 ? 250 : 160,
+        crossAxisSpacing: _view == 1 ? 22 : 16,
+        mainAxisSpacing: 20,
+        childAspectRatio: _view == 1 ? 0.55 : 0.5,
+      ),
+      children: [for (final b in books) _gridTile(p, b)],
+    );
+  }
+
+  Widget _listTile(Pal p, String b) {
+    final count = Store.pageCount(b);
+    final notes = Store.notes(b).length;
+    final marks = Store.marks(b).length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _open(b),
+          onLongPress: () => _bookMenu(b),
+          child: Ink(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: p.line),
+            ),
+            child: Row(
+              children: [
+                SizedBox(width: 78, height: 112, child: _Cover(path: b)),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(Store.title(b),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700, color: p.text)),
+                      const SizedBox(height: 4),
+                      Text(
+                        count == 0
+                            ? 'Belum dibuka'
+                            : 'hal ${Store.lastPage(b) + 1} dari $count · ${(Store.progress(b) * 100).round()}%',
+                        style: TextStyle(fontSize: 13, color: p.muted),
+                      ),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
+                        child: LinearProgressIndicator(
+                          value: Store.progress(b),
+                          minHeight: 4,
+                          color: p.accent,
+                          backgroundColor: p.line,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Icon(Icons.sticky_note_2_outlined, size: 16, color: p.muted),
+                          const SizedBox(width: 4),
+                          Text('$notes note', style: TextStyle(fontSize: 12, color: p.muted)),
+                          const SizedBox(width: 14),
+                          Icon(Icons.bookmark_border_rounded, size: 16, color: p.muted),
+                          const SizedBox(width: 4),
+                          Text('$marks tab', style: TextStyle(fontSize: 12, color: p.muted)),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-            ],
+                IconButton(
+                  tooltip: 'Menu buku',
+                  onPressed: () => _bookMenu(b),
+                  icon: const Icon(Icons.more_vert_rounded),
+                ),
+              ],
+            ),
           ),
-      ],
+        ),
+      ),
     );
   }
 
