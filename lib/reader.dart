@@ -44,6 +44,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   Mode _mode = Mode.read;
   int _hl = Store.sp.getInt('hl_color') ?? highlightColors.first;
+  int _turnStyle = Store.sp.getInt('turn_style') ?? 0;
   bool _stylusSeen = false;
   InkStroke? _live;
   int? _livePointer;
@@ -487,6 +488,70 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _pickTurn() async {
+    final v = await showModalBottomSheet<int>(
+      context: context,
+      useSafeArea: true,
+      builder: (ctx) {
+        final p = Pal.of(ctx);
+        Widget opt(int value, IconData icon, String title, String sub) {
+          final on = _turnStyle == value;
+          final child = Row(
+            children: [
+              Icon(icon, size: 28),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(sub, style: const TextStyle(fontSize: 13)),
+                  ],
+                ),
+              ),
+              if (on) const Icon(Icons.check_rounded),
+            ],
+          );
+          final style = FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(72),
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            alignment: Alignment.centerLeft,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          );
+          return on
+              ? FilledButton(onPressed: () => Navigator.pop(ctx, value), style: style, child: child)
+              : FilledButton.tonal(
+                  onPressed: () => Navigator.pop(ctx, value), style: style, child: child);
+        }
+
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 0, 20, 24 + MediaQuery.of(ctx).viewPadding.bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Gaya balik halaman',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: p.text)),
+              const SizedBox(height: 16),
+              opt(0, Icons.auto_stories_rounded, 'Lembaran',
+                  'Halaman dibuka kayak kertas buku, lipatan ikut jari'),
+              const SizedBox(height: 10),
+              opt(1, Icons.swipe_rounded, 'Geser', 'Halaman bergeser ke samping, paling ringan'),
+            ],
+          ),
+        );
+      },
+    );
+    if (v == null || v == _turnStyle) return;
+    await Store.sp.setInt('turn_style', v);
+    setState(() {
+      _turnStyle = v;
+      _startIndex = _current;
+      _flipVersion++;
+    });
+  }
+
   Future<void> _pickPaper() async {
     const values = [0, 2, 3];
     const labels = ['Asli', 'Sepia', 'Gelap'];
@@ -722,6 +787,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               if (v == 'full') _setFull(true);
               if (v == 'zoom') _openZoom();
               if (v == 'paper') _pickPaper();
+              if (v == 'turn') _pickTurn();
               if (v == 'focus') _pickFocus();
             },
             itemBuilder: (_) => const [
@@ -737,6 +803,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   value: 'paper',
                   child: ListTile(
                       leading: Icon(Icons.contrast_rounded), title: Text('Mode kertas'))),
+              PopupMenuItem(
+                  value: 'turn',
+                  child: ListTile(
+                      leading: Icon(Icons.auto_stories_rounded),
+                      title: Text('Gaya balik halaman'))),
               PopupMenuItem(
                   value: 'focus',
                   child: ListTile(
@@ -785,6 +856,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                   endPage: _endPage(p),
                   paper: pageBg(Store.paper.value, Theme.of(context).brightness == Brightness.dark),
                   enabled: _mode == Mode.read,
+                  style: _turnStyle,
                   onChanged: (i) {
                     if (i >= _count) return;
                     setState(() => _current = i);
