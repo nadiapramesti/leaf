@@ -1,7 +1,7 @@
 name: leaf
-description: Pembaca buku PDF dengan efek balik halaman, sticky note, dan tab penanda.
+description: Pembaca buku PDF dengan efek balik halaman, sticky note, tab, stylus, dan ubah tulisan jadi teks.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -14,6 +14,8 @@ dependencies:
   file_picker: ^8.1.2
   shared_preferences: ^2.3.2
   path_provider: ^2.1.4
+  google_fonts: ^6.2.1
+  google_mlkit_digital_ink_recognition: ">=0.11.0 <1.0.0"
 
 dev_dependencies:
   flutter_lints: ^4.0.0

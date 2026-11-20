@@ -1,553 +1,248 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
+import 'dart:math' as math;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:page_flip/page_flip.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:pdfx/pdfx.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:google_fonts/google_fonts.dart';
 
-void main() => runApp(const LeafApp());
+import 'home.dart';
+import 'store.dart';
 
-const _desk = Color(0xFF121C16);
-const _paper = Color(0xFFF7F1E3);
-const _accent = Color(0xFF8FD18A);
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Store.init();
+  runApp(const LeafApp());
+}
 
 class LeafApp extends StatelessWidget {
   const LeafApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Leaf',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: _desk,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: _accent,
-          brightness: Brightness.dark,
-        ),
-      ),
-      home: const HomePage(),
-    );
-  }
-}
-
-// ---------------------------------------------------------------- model
-
-class Note {
-  Note({
-    required this.id,
-    required this.page,
-    required this.x,
-    required this.y,
-    required this.color,
-    this.text = '',
-  });
-
-  final String id;
-  final int page; // index halaman (mulai 0)
-  double x; // posisi relatif 0..1
-  double y;
-  int color;
-  String text;
-
-  Map<String, dynamic> toJson() =>
-      {'id': id, 'page': page, 'x': x, 'y': y, 'color': color, 'text': text};
-
-  factory Note.fromJson(Map<String, dynamic> j) => Note(
-        id: j['id'],
-        page: j['page'],
-        x: (j['x'] as num).toDouble(),
-        y: (j['y'] as num).toDouble(),
-        color: j['color'],
-        text: j['text'] ?? '',
-      );
-}
-
-const noteColors = <int>[0xFFFFE066, 0xFFFF9EB5, 0xFF9EE6B8, 0xFF9ED0FF];
-
-// ---------------------------------------------------------------- home
-
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
-
-  @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
-  List<String> _books = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final sp = await SharedPreferences.getInstance();
-    final list = (sp.getStringList('books') ?? [])
-        .where((p) => File(p).existsSync())
-        .toList();
-    setState(() => _books = list);
-  }
-
-  Future<void> _addBook() async {
-    final res = await FilePicker.platform
-        .pickFiles(type: FileType.custom, allowedExtensions: ['pdf']);
-    final src = res?.files.single.path;
-    if (src == null) return;
-    // salin ke penyimpanan app supaya nggak hilang
-    final dir = await getApplicationDocumentsDirectory();
-    final name = src.split(Platform.pathSeparator).last;
-    final dest = '${dir.path}${Platform.pathSeparator}$name';
-    await File(src).copy(dest);
-    final sp = await SharedPreferences.getInstance();
-    final list = sp.getStringList('books') ?? [];
-    if (!list.contains(dest)) list.add(dest);
-    await sp.setStringList('books', list);
-    await _load();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Rak Leaf',
-            style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: .5)),
-        backgroundColor: Colors.transparent,
-      ),
-      body: _books.isEmpty
-          ? const Center(
-              child: Padding(
-                padding: EdgeInsets.all(32),
-                child: Text(
-                  'Rak masih kosong.\nTambah buku PDF kamu di tombol bawah.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 16, height: 1.5),
-                ),
-              ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: _books.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (_, i) {
-                final p = _books[i];
-                final title = p
-                    .split(Platform.pathSeparator)
-                    .last
-                    .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
-                return Material(
-                  color: const Color(0xFF1F3027),
-                  borderRadius: BorderRadius.circular(14),
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 8),
-                    leading: const Icon(Icons.menu_book_rounded,
-                        color: _accent, size: 32),
-                    title: Text(title,
-                        maxLines: 2, overflow: TextOverflow.ellipsis),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => ReaderPage(path: p)),
-                    ),
-                  ),
-                );
-              },
-            ),
-      bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: FilledButton.icon(
-          onPressed: _addBook,
-          icon: const Icon(Icons.upload_file_rounded),
-          label: const Text('Tambah buku PDF'),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(52),
-            backgroundColor: _accent,
-            foregroundColor: Colors.black,
-          ),
-        ),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: Store.themeMode,
+      builder: (_, mode, __) => MaterialApp(
+        title: 'Leaf',
+        debugShowCheckedModeBanner: false,
+        themeMode: mode,
+        theme: leafTheme(Brightness.light),
+        darkTheme: leafTheme(Brightness.dark),
+        home: const SplashPage(),
       ),
     );
   }
 }
 
-// ---------------------------------------------------------------- reader
+// ------------------------------------------------------------------ splash
 
-class ReaderPage extends StatefulWidget {
-  const ReaderPage({super.key, required this.path});
-  final String path;
+const _splashBg = Color(0xFF123A25);
+const _cream = Color(0xFFF5EFDF);
+
+class SplashPage extends StatefulWidget {
+  const SplashPage({super.key});
 
   @override
-  State<ReaderPage> createState() => _ReaderPageState();
+  State<SplashPage> createState() => _SplashPageState();
 }
 
-class _ReaderPageState extends State<ReaderPage> {
-  final _flipKey = GlobalKey<PageFlipWidgetState>();
-  PdfDocument? _doc;
-  int _pageCount = 0;
-  int _current = 0;
-  int _startIndex = 0;
-  List<Widget> _pages = const [];
-  final Map<int, Future<Uint8List>> _cache = {};
-  Future<void> _renderLock = Future.value();
-
-  List<Note> _notes = [];
-  Set<int> _bookmarks = {};
-  SharedPreferences? _sp;
-
-  String get _kNotes => 'notes::${widget.path}';
-  String get _kMarks => 'marks::${widget.path}';
-  String get _kLast => 'last::${widget.path}';
+class _SplashPageState extends State<SplashPage>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1500),
+  );
 
   @override
   void initState() {
     super.initState();
-    _init();
-  }
-
-  Future<void> _init() async {
-    _sp = await SharedPreferences.getInstance();
-    final doc = await PdfDocument.openFile(widget.path);
-    final notesRaw = _sp!.getString(_kNotes);
-    setState(() {
-      _doc = doc;
-      _pageCount = doc.pagesCount;
-      _current = (_sp!.getInt(_kLast) ?? 0).clamp(0, doc.pagesCount - 1);
-      _startIndex = _current;
-      // dibuat sekali supaya flip nggak ke-reset tiap setState
-      _pages = List.generate(doc.pagesCount, _pageView);
-      _bookmarks =
-          (_sp!.getStringList(_kMarks) ?? []).map(int.parse).toSet();
-      if (notesRaw != null) {
-        _notes = (jsonDecode(notesRaw) as List)
-            .map((e) => Note.fromJson(e))
-            .toList();
-      }
+    _c.forward().whenComplete(() async {
+      await Future.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 450),
+        pageBuilder: (_, __, ___) => const HomePage(),
+        transitionsBuilder: (_, a, __, child) =>
+            FadeTransition(opacity: a, child: child),
+      ));
     });
   }
 
   @override
   void dispose() {
-    _doc?.close();
+    _c.dispose();
     super.dispose();
-  }
-
-  Future<void> _saveNotes() => _sp!
-      .setString(_kNotes, jsonEncode(_notes.map((n) => n.toJson()).toList()));
-
-  Future<void> _saveMarks() => _sp!.setStringList(
-      _kMarks, (_bookmarks.toList()..sort()).map((e) => '$e').toList());
-
-  // render halaman satu per satu (antre) biar pdfx nggak rebutan
-  Future<Uint8List> _render(int i) {
-    return _cache.putIfAbsent(i, () {
-      final c = Completer<Uint8List>();
-      _renderLock = _renderLock.then((_) async {
-        try {
-          final page = await _doc!.getPage(i + 1);
-          final img = await page.render(
-            width: page.width * 2,
-            height: page.height * 2,
-            format: PdfPageImageFormat.jpeg,
-            backgroundColor: '#FFFFFF',
-          );
-          await page.close();
-          c.complete(img!.bytes);
-        } catch (e) {
-          c.completeError(e);
-        }
-      });
-      return c.future;
-    });
-  }
-
-  Widget _pageView(int i) {
-    return Container(
-      color: Colors.white,
-      child: FutureBuilder<Uint8List>(
-        future: _render(i),
-        builder: (_, snap) {
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          return Image.memory(snap.data!, fit: BoxFit.contain);
-        },
-      ),
-    );
-  }
-
-  void _addNote() {
-    final n = Note(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      page: _current,
-      x: 0.35,
-      y: 0.35,
-      color: noteColors[_notes.length % noteColors.length],
-    );
-    setState(() => _notes.add(n));
-    _editNote(n, isNew: true);
-  }
-
-  Future<void> _editNote(Note n, {bool isNew = false}) async {
-    final ctrl = TextEditingController(text: n.text);
-    int color = n.color;
-    final action = await showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: const Color(0xFF18261F),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => Padding(
-          padding: EdgeInsets.fromLTRB(
-              20, 20, 20, MediaQuery.of(ctx).viewInsets.bottom + 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Sticky note · hal. ${n.page + 1}',
-                  style: const TextStyle(
-                      fontSize: 18, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 12),
-              TextField(
-                controller: ctrl,
-                autofocus: true,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  hintText: 'Contoh: rumus ini sering keluar di ujian',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  for (final c in noteColors)
-                    GestureDetector(
-                      onTap: () => setS(() => color = c),
-                      child: Container(
-                        width: 36,
-                        height: 36,
-                        margin: const EdgeInsets.only(right: 10),
-                        decoration: BoxDecoration(
-                          color: Color(c),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                              color: color == c
-                                  ? Colors.white
-                                  : Colors.transparent,
-                              width: 3),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => Navigator.pop(ctx, 'delete'),
-                      icon: const Icon(Icons.delete_outline),
-                      label: const Text('Hapus'),
-                      style: OutlinedButton.styleFrom(
-                          minimumSize: const Size.fromHeight(48)),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: FilledButton.icon(
-                      onPressed: () => Navigator.pop(ctx, 'save'),
-                      icon: const Icon(Icons.check_rounded),
-                      label: const Text('Simpan'),
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(48),
-                        backgroundColor: _accent,
-                        foregroundColor: Colors.black,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    setState(() {
-      if (action == 'save') {
-        n.text = ctrl.text.trim();
-        n.color = color;
-      } else if (action == 'delete' || (isNew && action == null)) {
-        _notes.remove(n);
-      }
-    });
-    await _saveNotes();
-  }
-
-  Widget _noteOverlay(double w, double h) {
-    final here = _notes.where((n) => n.page == _current);
-    return Stack(
-      children: [
-        for (final n in here)
-          Positioned(
-            left: n.x * w,
-            top: n.y * h,
-            child: GestureDetector(
-              onTap: () => _editNote(n),
-              onPanUpdate: (d) => setState(() {
-                n.x = (n.x + d.delta.dx / w).clamp(0.0, 0.8);
-                n.y = (n.y + d.delta.dy / h).clamp(0.0, 0.9);
-              }),
-              onPanEnd: (_) => _saveNotes(),
-              child: Transform.rotate(
-                angle: -0.03,
-                child: Container(
-                  width: 120,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Color(n.color),
-                    borderRadius: BorderRadius.circular(4),
-                    boxShadow: const [
-                      BoxShadow(
-                          color: Colors.black38,
-                          blurRadius: 8,
-                          offset: Offset(2, 4)),
-                    ],
-                  ),
-                  child: Text(
-                    n.text.isEmpty ? '(kosong)' : n.text,
-                    maxLines: 6,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: Colors.black87, fontSize: 13, height: 1.25),
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _tabs() {
-    final marks = _bookmarks.toList()..sort();
-    if (marks.isEmpty) return const SizedBox(height: 8);
-    return SizedBox(
-      height: 44,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        children: [
-          for (final p in marks)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: FilledButton.tonal(
-                onPressed: () => _flipKey.currentState?.goToPage(p),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  backgroundColor: p == _current
-                      ? _accent
-                      : const Color(0xFF1F3027),
-                  foregroundColor:
-                      p == _current ? Colors.black : Colors.white,
-                ),
-                child: Text('Hal ${p + 1}'),
-              ),
-            ),
-        ],
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_doc == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-    final marked = _bookmarks.contains(_current);
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        title: Text('Hal ${_current + 1} / $_pageCount',
-            style: const TextStyle(fontSize: 16)),
-      ),
-      body: Column(
+      backgroundColor: _splashBg,
+      body: Stack(
         children: [
-          _tabs(),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (_, box) => Stack(
-                children: [
-                  PageFlipWidget(
-                    key: _flipKey,
-                    backgroundColor: _desk,
-                    showDragCutoff: false,
-                    initialIndex: _startIndex,
-                    lastPage: Container(
-                      color: _paper,
-                      child: const Center(child: Text('— Tamat —',
-                          style: TextStyle(color: Colors.black54))),
+          Positioned(
+            left: -90,
+            bottom: -120,
+            child: Transform.rotate(
+                angle: 0.3, child: const _LeafShape(size: 420, color: Color(0xFF16462D))),
+          ),
+          Positioned(
+            right: -130,
+            top: -110,
+            child: Transform.rotate(
+                angle: -0.5, child: const _LeafShape(size: 360, color: Color(0xFF154129))),
+          ),
+          Center(
+            child: AnimatedBuilder(
+              animation: _c,
+              builder: (_, __) {
+                final t = Curves.easeOutCubic.transform(_c.value);
+                final wobble = math.sin(_c.value * math.pi) * -0.14;
+                final fold = ((_c.value - 0.4) / 0.6).clamp(0.0, 1.0);
+                final word = ((_c.value - 0.55) / 0.45).clamp(0.0, 1.0);
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Opacity(
+                      opacity: (t * 2).clamp(0.0, 1.0),
+                      child: Transform.rotate(
+                        angle: wobble,
+                        child: Transform.scale(
+                          scale: 0.9 + 0.1 * t,
+                          child: _LeafMark(fold: Curves.easeOut.transform(fold)),
+                        ),
+                      ),
                     ),
-                    onPageFlipped: (i) {
-                      setState(() => _current = i);
-                      _sp?.setInt(_kLast, i);
-                    },
-                    children: _pages,
+                    const SizedBox(height: 26),
+                    Opacity(
+                      opacity: word,
+                      child: Transform.translate(
+                        offset: Offset(0, 10 * (1 - word)),
+                        child: Text('Leaf',
+                            style: GoogleFonts.fraunces(
+                                fontSize: 44,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -1,
+                                color: _cream)),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+const _leafRadius = BorderRadius.only(
+  topLeft: Radius.circular(6),
+  topRight: Radius.circular(110),
+  bottomRight: Radius.circular(6),
+  bottomLeft: Radius.circular(110),
+);
+
+class _LeafShape extends StatelessWidget {
+  const _LeafShape({required this.size, required this.color});
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.only(
+            topRight: Radius.circular(size),
+            bottomLeft: Radius.circular(size),
+          ),
+        ),
+      );
+}
+
+/// Logo: daun yang juga selembar halaman, sudutnya terlipat seperti dibalik.
+class _LeafMark extends StatelessWidget {
+  const _LeafMark({required this.fold});
+  final double fold;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 132,
+      height: 132,
+      child: Stack(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              color: _cream,
+              borderRadius: _leafRadius,
+              boxShadow: [
+                BoxShadow(color: Colors.black38, blurRadius: 40, offset: Offset(0, 18))
+              ],
+            ),
+          ),
+          const Positioned.fill(child: CustomPaint(painter: _VeinPainter())),
+          Positioned.fill(
+            child: ClipPath(
+              clipper: _FoldClipper(fold),
+              child: Container(
+                decoration: const BoxDecoration(
+                  borderRadius: _leafRadius,
+                  gradient: LinearGradient(
+                    begin: Alignment.topRight,
+                    end: Alignment.bottomLeft,
+                    colors: [Color(0xFF8FD6A6), Color(0xFFD9EFE0)],
                   ),
-                  _noteOverlay(box.maxWidth, box.maxHeight),
-                ],
+                ),
               ),
             ),
           ),
         ],
       ),
-      bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: _addNote,
-                icon: const Icon(Icons.sticky_note_2_rounded),
-                label: const Text('Sticky note'),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                  backgroundColor: _accent,
-                  foregroundColor: Colors.black,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton.tonalIcon(
-                onPressed: () async {
-                  setState(() => marked
-                      ? _bookmarks.remove(_current)
-                      : _bookmarks.add(_current));
-                  await _saveMarks();
-                },
-                icon: Icon(marked
-                    ? Icons.bookmark_remove_rounded
-                    : Icons.bookmark_add_rounded),
-                label: Text(marked ? 'Lepas tab' : 'Pasang tab'),
-                style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(52)),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
+}
+
+class _VeinPainter extends CustomPainter {
+  const _VeinPainter();
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final main = Paint()
+      ..color = const Color(0xFF2F7A4F)
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    final side = Paint()
+      ..color = const Color(0xFF9DC9AC)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset(s.width * .16, s.height * .84),
+        Offset(s.width * .84, s.height * .16), main);
+    for (final f in [0.34, 0.48, 0.62]) {
+      final o = Offset(s.width * f, s.height * (1 - f));
+      canvas.drawLine(o, o + const Offset(-4, -22), side);
+      canvas.drawLine(o, o + const Offset(22, 4), side);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _FoldClipper extends CustomClipper<Path> {
+  _FoldClipper(this.t);
+  final double t;
+
+  @override
+  Path getClip(Size s) {
+    final d = s.width * 0.42 * t;
+    return Path()
+      ..moveTo(s.width, 0)
+      ..lineTo(s.width - d, 0)
+      ..lineTo(s.width, d)
+      ..close();
+  }
+
+  @override
+  bool shouldReclip(covariant _FoldClipper old) => old.t != t;
 }

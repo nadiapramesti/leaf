@@ -24,7 +24,7 @@ jobs:
           channel: stable
           cache: true
 
-      # folder android/ dibuat otomatis kalau belum ada di repo
+      # folder android/ dibuat otomatis, lalu diisi nama, ikon, splash, izin
       - name: Siapkan folder android
         run: |
           if [ ! -d android ]; then
@@ -32,16 +32,44 @@ jobs:
             cp -r _scaffold/android ./android
             rm -rf _scaffold
           fi
-          sed -i 's/android:label="[^"]*"/android:label="Leaf"/' android/app/src/main/AndroidManifest.xml
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's/android:label="[^"]*"/android:label="Leaf"/' $M
+          grep -q 'android.permission.INTERNET' $M || sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' $M
+          R=android/app/src/main/res
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            cp assets/icon/ic_launcher_$d.png $R/mipmap-$d/ic_launcher.png
+          done
+          for f in $R/drawable/launch_background.xml $R/drawable-v21/launch_background.xml; do
+            [ -f "$f" ] && printf '%s\n' '<?xml version="1.0" encoding="utf-8"?>' \
+              '<layer-list xmlns:android="http://schemas.android.com/apk/res/android">' \
+              '  <item><shape><solid android:color="#FF123A25"/></shape></item>' \
+              '</layer-list>' > "$f"
+          done
+          cat $M
 
       - run: flutter pub get
 
       - name: Analyze
-        run: flutter analyze
-        continue-on-error: true
+        run: |
+          flutter analyze --no-fatal-infos --no-fatal-warnings > analyze.log 2>&1 || true
+          cat analyze.log
+          if grep -q " error " analyze.log; then
+            msg=$(grep " error " analyze.log | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=analyze::$msg"
+          fi
 
       - name: Build APK
-        run: flutter build apk --release
+        run: |
+          set -o pipefail
+          flutter build apk --release 2>&1 | tee build.log
+
+      - name: Kirim error build ke annotations
+        if: failure()
+        run: |
+          [ -f build.log ] || exit 0
+          msg=$(grep -iE "error|what went wrong|exception|failed|> " build.log | grep -v "^\s*$" | head -60 | sed ':a;N;$!ba;s/\n/%0A/g')
+          echo "::error title=build::$msg"
+          tail -40 build.log | sed ':a;N;$!ba;s/\n/%0A/g' | xargs -0 -I{} echo "::error title=tail::{}"
 
       - name: Rename APK
         run: cp build/app/outputs/flutter-apk/app-release.apk Leaf.apk
