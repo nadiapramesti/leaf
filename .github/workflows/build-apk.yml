@@ -45,6 +45,28 @@ jobs:
               '  <item><shape><solid android:color="#FF123A25"/></shape></item>' \
               '</layer-list>' > "$f"
           done
+          # paksa semua plugin compile pakai Android SDK 36 (plugin lama masih 34)
+          if [ -f android/build.gradle.kts ]; then
+            G=android/build.gradle.kts
+            printf '%s\n' 'subprojects {' \
+              '    afterEvaluate {' \
+              '        (extensions.findByName("android") as? com.android.build.api.dsl.LibraryExtension)?.let {' \
+              '            if ((it.compileSdk ?: 0) < 36) it.compileSdk = 36' \
+              '        }' \
+              '    }' \
+              '}' > /tmp/fix.gradle
+          else
+            G=android/build.gradle
+            printf '%s\n' 'subprojects {' \
+              '    afterEvaluate { p ->' \
+              '        if (p.plugins.hasPlugin("com.android.library")) {' \
+              '            p.android { compileSdkVersion 36 }' \
+              '        }' \
+              '    }' \
+              '}' > /tmp/fix.gradle
+          fi
+          grep -q 'compileSdk = 36\|compileSdkVersion 36' $G || { cat /tmp/fix.gradle $G > /tmp/g && mv /tmp/g $G; }
+          cat $G
           cat $M
 
       - run: flutter pub get
