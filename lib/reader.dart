@@ -4,8 +4,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:page_flip/page_flip.dart';
 import 'package:pdfx/pdfx.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'extras.dart';
 import 'sheets.dart';
@@ -23,7 +25,7 @@ class ReaderPage extends StatefulWidget {
   State<ReaderPage> createState() => _ReaderPageState();
 }
 
-class _ReaderPageState extends State<ReaderPage> {
+class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   PdfDocument? _doc;
   String? _error;
   int _count = 0;
@@ -47,12 +49,46 @@ class _ReaderPageState extends State<ReaderPage> {
   double? _slide;
   Size _pageSize = Size.zero;
 
+  final Stopwatch _watch = Stopwatch();
+  Timer? _tick;
+  Timer? _focus;
+  int _focusLeft = 0;
+  int _focusMinutes = 0;
+
   String get _path => widget.path;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _awake(true);
+    _watch.start();
+    _tick = Timer.periodic(const Duration(seconds: 30), (_) => _flush());
     _open();
+  }
+
+  void _awake(bool on) {
+    try {
+      on ? WakelockPlus.enable() : WakelockPlus.disable();
+    } catch (_) {}
+  }
+
+  void _flush() {
+    final s = _watch.elapsed.inSeconds;
+    _watch.reset();
+    Store.addReading(s);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _watch.start();
+      _awake(true);
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _flush();
+      _watch.stop();
+      _awake(false);
+    }
   }
 
   Future<void> _open() async {
@@ -84,6 +120,11 @@ class _ReaderPageState extends State<ReaderPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _flush();
+    _tick?.cancel();
+    _focus?.cancel();
+    _awake(false);
     _doc?.close();
     super.dispose();
   }
@@ -133,8 +174,17 @@ class _ReaderPageState extends State<ReaderPage> {
           return Image.memory(snap.data!, fit: BoxFit.fill, gaplessPlayback: true);
         },
       );
-      if (dark) img = ColorFiltered(colorFilter: darkPageFilter, child: img);
-      return Container(color: dark ? const Color(0xFF1A1C19) : Colors.white, child: img);
+      final child = img;
+      return ValueListenableBuilder<int>(
+        valueListenable: Store.paper,
+        builder: (_, mode, __) {
+          final f = pageFilter(mode, dark);
+          return Container(
+            color: pageBg(mode, dark),
+            child: f == null ? child : ColorFiltered(colorFilter: f, child: child),
+          );
+        },
+      );
     });
   }
 
@@ -220,6 +270,169 @@ class _ReaderPageState extends State<ReaderPage> {
         ),
       ),
     );
+  }
+
+  // ---------------------------------------------------------------- fokus & kertas
+
+  Future<void> _pickFocus() async {
+    final m = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) {
+        final p = Pal.of(ctx);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Timer fokus',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: p.text)),
+              const SizedBox(height: 6),
+              Text('Baca tanpa distraksi, nanti diingetin istirahat.',
+                  style: TextStyle(color: p.muted)),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  for (final v in [15, 25, 45]) ...[
+                    Expanded(
+                      child: FilledButton.tonal(
+                        onPressed: () => Navigator.pop(ctx, v),
+                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
+                        child: Text('$v menit',
+                            style: const TextStyle(fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                    if (v != 45) const SizedBox(width: 10),
+                  ],
+                ],
+              ),
+              if (_focus != null) ...[
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.pop(ctx, 0),
+                  icon: const Icon(Icons.stop_rounded),
+                  label: const Text('Hentikan timer'),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+    if (m == null) return;
+    if (m == 0) {
+      _stopFocus();
+    } else {
+      _startFocus(m);
+    }
+  }
+
+  void _stopFocus() {
+    _focus?.cancel();
+    setState(() => _focus = null);
+  }
+
+  void _startFocus(int minutes) {
+    _focus?.cancel();
+    setState(() {
+      _focusMinutes = minutes;
+      _focusLeft = minutes * 60;
+    });
+    _focus = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return t.cancel();
+      setState(() => _focusLeft--);
+      if (_focusLeft <= 0) {
+        t.cancel();
+        setState(() => _focus = null);
+        HapticFeedback.heavyImpact();
+        showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            icon: const Icon(Icons.self_improvement_rounded, size: 36),
+            title: const Text('Waktunya istirahat'),
+            content: Text(
+                'Kamu udah fokus $_focusMinutes menit. Istirahat 5 menit dulu biar materinya nempel.'),
+            actions: [
+              FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Oke')),
+            ],
+          ),
+        );
+      }
+    });
+  }
+
+  Future<void> _pickPaper() async {
+    const labels = ['Otomatis', 'Putih', 'Sepia', 'Gelap'];
+    const icons = [
+      Icons.brightness_auto_rounded,
+      Icons.light_mode_rounded,
+      Icons.coffee_rounded,
+      Icons.dark_mode_rounded,
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) {
+        final p = Pal.of(ctx);
+        return ValueListenableBuilder<int>(
+          valueListenable: Store.paper,
+          builder: (_, mode, __) => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Mode kertas',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: p.text)),
+                const SizedBox(height: 6),
+                Text('Otomatis ikut tema app. Sepia paling nyaman buat baca lama.',
+                    style: TextStyle(color: p.muted)),
+                const SizedBox(height: 16),
+                GridView.count(
+                  crossAxisCount: 4,
+                  shrinkWrap: true,
+                  crossAxisSpacing: 10,
+                  childAspectRatio: 0.9,
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: [
+                    for (var i = 0; i < 4; i++)
+                      _paperButton(
+                        selected: mode == i,
+                        onPressed: () => Store.setPaper(i),
+                        icon: icons[i],
+                        label: labels[i],
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _paperButton({
+    required bool selected,
+    required VoidCallback onPressed,
+    required IconData icon,
+    required String label,
+  }) {
+    final style = FilledButton.styleFrom(
+      padding: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    );
+    final child = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon),
+        const SizedBox(height: 6),
+        Text(label, style: const TextStyle(fontSize: 12)),
+      ],
+    );
+    return selected
+        ? FilledButton(onPressed: onPressed, style: style, child: child)
+        : FilledButton.tonal(onPressed: onPressed, style: style, child: child);
   }
 
   // ---------------------------------------------------------------- coretan
@@ -355,15 +568,33 @@ class _ReaderPageState extends State<ReaderPage> {
             icon: const Icon(Icons.grid_view_rounded),
           ),
           IconButton(
-            tooltip: 'Perbesar halaman',
-            onPressed: _openZoom,
-            icon: const Icon(Icons.zoom_in_rounded),
-          ),
-          IconButton(
             tooltip: marked ? 'Lepas tab' : 'Pasang tab',
             onPressed: _toggleMark,
             icon: Icon(marked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
                 color: marked ? p.accent : null),
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Lainnya',
+            icon: const Icon(Icons.more_vert_rounded),
+            onSelected: (v) {
+              if (v == 'zoom') _openZoom();
+              if (v == 'paper') _pickPaper();
+              if (v == 'focus') _pickFocus();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                  value: 'zoom',
+                  child: ListTile(
+                      leading: Icon(Icons.zoom_in_rounded), title: Text('Perbesar halaman'))),
+              PopupMenuItem(
+                  value: 'paper',
+                  child: ListTile(
+                      leading: Icon(Icons.contrast_rounded), title: Text('Mode kertas'))),
+              PopupMenuItem(
+                  value: 'focus',
+                  child: ListTile(
+                      leading: Icon(Icons.timer_outlined), title: Text('Timer fokus'))),
+            ],
           ),
           const SizedBox(width: 4),
         ],
@@ -504,9 +735,33 @@ class _ReaderPageState extends State<ReaderPage> {
 
   Widget _readBar(Pal p) {
     final shown = (_slide ?? _current.toDouble()).round();
+    final mm = (_focusLeft ~/ 60).toString().padLeft(2, '0');
+    final ss = (_focusLeft % 60).toString().padLeft(2, '0');
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (_focus != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              children: [
+                Icon(Icons.timer_outlined, size: 20, color: p.accent),
+                const SizedBox(width: 8),
+                Text('Fokus $mm:$ss',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: p.text)),
+                const Spacer(),
+                OutlinedButton.icon(
+                  onPressed: _stopFocus,
+                  icon: const Icon(Icons.stop_rounded, size: 18),
+                  label: const Text('Stop'),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 38)),
+                ),
+              ],
+            ),
+          ),
         if (_count > 1)
           Row(
             children: [

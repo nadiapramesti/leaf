@@ -23,7 +23,8 @@ class ZoomPage extends StatelessWidget {
         builder: (_, snap) {
           if (!snap.hasData) return const Center(child: CircularProgressIndicator());
           Widget img = Image.memory(snap.data!, fit: BoxFit.contain);
-          if (dark) img = ColorFiltered(colorFilter: darkPageFilter, child: img);
+          final f = pageFilter(Store.paper.value, dark);
+          if (f != null) img = ColorFiltered(colorFilter: f, child: img);
           return InteractiveViewer(
             minScale: 1,
             maxScale: 6,
@@ -48,6 +49,37 @@ const darkPageFilter = ColorFilter.matrix(<double>[
   0, 0, -0.77, 0, 220, //
   0, 0, 0, 1, 0,
 ]);
+
+const sepiaPageFilter = ColorFilter.matrix(<double>[
+  0.153, 0.516, 0.052, 0, 60, //
+  0.159, 0.537, 0.054, 0, 45, //
+  0.155, 0.521, 0.053, 0, 30, //
+  0, 0, 0, 1, 0,
+]);
+
+int effectivePaper(int mode, bool dark) => mode == 0 ? (dark ? 3 : 1) : mode;
+
+ColorFilter? pageFilter(int mode, bool dark) {
+  switch (effectivePaper(mode, dark)) {
+    case 2:
+      return sepiaPageFilter;
+    case 3:
+      return darkPageFilter;
+    default:
+      return null;
+  }
+}
+
+Color pageBg(int mode, bool dark) {
+  switch (effectivePaper(mode, dark)) {
+    case 2:
+      return const Color(0xFFF4ECD8);
+    case 3:
+      return const Color(0xFF1A1C19);
+    default:
+      return Colors.white;
+  }
+}
 
 // ------------------------------------------------------------------ grid halaman
 
@@ -170,8 +202,9 @@ class _PageGridPageState extends State<PageGridPage> {
                                       builder: (_, snap) {
                                         if (!snap.hasData) return const SizedBox();
                                         Widget img = Image.memory(snap.data!, fit: BoxFit.cover);
-                                        if (dark) {
-                                          img = ColorFiltered(colorFilter: darkPageFilter, child: img);
+                                        final f = pageFilter(Store.paper.value, dark);
+                                        if (f != null) {
+                                          img = ColorFiltered(colorFilter: f, child: img);
                                         }
                                         return img;
                                       },

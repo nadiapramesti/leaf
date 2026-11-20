@@ -226,8 +226,43 @@ class Store {
   static late SharedPreferences sp;
   static final themeMode = ValueNotifier<ThemeMode>(ThemeMode.system);
 
+  /// 0 otomatis (ikut tema), 1 putih, 2 sepia, 3 gelap
+  static final paper = ValueNotifier<int>(0);
+
+  static Future<void> setPaper(int m) async {
+    paper.value = m;
+    await sp.setInt('paper', m);
+  }
+
+  static String _day(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  static int secondsOn(DateTime d) => sp.getInt('read::${_day(d)}') ?? 0;
+
+  static Future<void> addReading(int sec) async {
+    if (sec <= 0) return;
+    final k = 'read::${_day(DateTime.now())}';
+    await sp.setInt(k, (sp.getInt(k) ?? 0) + sec);
+  }
+
+  static int get dailyGoal => sp.getInt('goal') ?? 20;
+  static Future<void> setGoal(int m) => sp.setInt('goal', m);
+
+  /// hari beruntun dengan minimal 1 menit baca
+  static int streak() {
+    var d = DateTime.now();
+    if (secondsOn(d) < 60) d = d.subtract(const Duration(days: 1));
+    var n = 0;
+    while (secondsOn(d) >= 60 && n < 3650) {
+      n++;
+      d = d.subtract(const Duration(days: 1));
+    }
+    return n;
+  }
+
   static Future<void> init() async {
     sp = await SharedPreferences.getInstance();
+    paper.value = sp.getInt('paper') ?? 0;
     final i = sp.getInt('theme') ?? 0;
     themeMode.value = ThemeMode.values[i.clamp(0, 2)];
   }

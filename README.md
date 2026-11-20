@@ -9,6 +9,8 @@ Pembaca buku PDF pribadi, simpel ala Google Books. Upload PDF sendiri, baca deng
 - Tab penanda halaman
 - Mode Tulis & Stabilo untuk stylus (sentuhan telapak diabaikan, tombol hapus stylus = penghapus)
 - Ubah tulisan tangan jadi teks (Google ML Kit, offline setelah model diunduh)
+- Zoom halaman, grid semua halaman, review flashcard, salin catatan, ganti judul
+- Target baca harian + streak, timer fokus, mode kertas (putih/sepia/gelap), layar tetap nyala
 - Mode terang & gelap, splash animasi
 
 ## Build APK

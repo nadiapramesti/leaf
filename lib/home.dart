@@ -20,6 +20,7 @@ class _HomePageState extends State<HomePage> {
   int _tab = 0;
   String _query = '';
   String? _bookFilter;
+  String _noteQuery = '';
   bool _busy = false;
 
   Future<void> _open(String path, {int? page}) async {
@@ -86,6 +87,46 @@ class _HomePageState extends State<HomePage> {
     );
     if (act == 'rename') await _rename(path);
     if (act == 'delete') await _confirmDelete(path);
+  }
+
+  Future<void> _pickGoal() async {
+    final g = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) {
+        final p = Pal.of(ctx);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Target baca harian',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: p.text)),
+              const SizedBox(height: 6),
+              Text('Streak nambah tiap hari kamu baca minimal 1 menit.',
+                  style: TextStyle(color: p.muted)),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final m in [10, 15, 20, 30, 45, 60])
+                    ChoiceChip(
+                      showCheckmark: false,
+                      selected: Store.dailyGoal == m,
+                      label: Text('$m menit'),
+                      onSelected: (_) => Navigator.pop(ctx, m),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (g == null) return;
+    await Store.setGoal(g);
+    if (mounted) setState(() {});
   }
 
   Future<void> _rename(String path) async {
@@ -266,6 +307,10 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
+        if (all.isNotEmpty && _query.isEmpty) ...[
+          const SizedBox(height: 14),
+          _StatsCard(onTap: _pickGoal),
+        ],
         if (last != null && _query.isEmpty) ...[
           const SizedBox(height: 22),
           Text('Lanjut baca',
@@ -390,9 +435,16 @@ class _HomePageState extends State<HomePage> {
       for (final b in books)
         if (Store.notes(b).isNotEmpty) b
     ];
-    final shown = _bookFilter == null || !withNotes.contains(_bookFilter)
-        ? withNotes
-        : [_bookFilter!];
+    final q = _noteQuery.toLowerCase();
+    List<Note> matched(String b) => (Store.notes(b)
+          ..sort((a, c) => a.page.compareTo(c.page)))
+        .where((n) => q.isEmpty || n.text.toLowerCase().contains(q))
+        .toList();
+    final shown = (_bookFilter == null || !withNotes.contains(_bookFilter)
+            ? withNotes
+            : [_bookFilter!])
+        .where((b) => matched(b).isNotEmpty)
+        .toList();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
@@ -428,6 +480,15 @@ class _HomePageState extends State<HomePage> {
             ],
           ),
           const SizedBox(height: 14),
+          TextField(
+            onChanged: (v) => setState(() => _noteQuery = v.trim()),
+            decoration: const InputDecoration(
+              hintText: 'Contoh: normalisasi',
+              prefixIcon: Icon(Icons.search_rounded),
+              contentPadding: EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+          const SizedBox(height: 12),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -439,6 +500,8 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
+          if (shown.isEmpty)
+            const _Empty(icon: Icons.search_off_rounded, text: 'Nggak ada catatan yang cocok.'),
           for (final b in shown) ...[
             const SizedBox(height: 22),
             Text(Store.title(b).toUpperCase(),
@@ -448,7 +511,7 @@ class _HomePageState extends State<HomePage> {
                     fontWeight: FontWeight.w700,
                     color: p.muted)),
             const SizedBox(height: 4),
-            for (final n in (Store.notes(b)..sort((a, c) => a.page.compareTo(c.page))))
+            for (final n in matched(b))
               InkWell(
                 onTap: () => _open(b, page: n.page),
                 child: Container(
@@ -500,6 +563,86 @@ class _HomePageState extends State<HomePage> {
           onSelected: (_) => onTap(),
         ),
       );
+}
+
+class _StatsCard extends StatelessWidget {
+  const _StatsCard({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Pal.of(context);
+    final today = Store.secondsOn(DateTime.now()) ~/ 60;
+    final goal = Store.dailyGoal;
+    final streak = Store.streak();
+    final done = today >= goal;
+    return Material(
+      color: p.accentSoft,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 48,
+                height: 48,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox.expand(
+                      child: CircularProgressIndicator(
+                        value: (today / goal).clamp(0.0, 1.0),
+                        strokeWidth: 5,
+                        color: p.accent,
+                        backgroundColor: p.bg.withValues(alpha: 0.6),
+                      ),
+                    ),
+                    Icon(done ? Icons.check_rounded : Icons.menu_book_rounded,
+                        size: 20, color: p.onAccentSoft),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(done ? 'Target hari ini tercapai' : 'Hari ini $today / $goal menit',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w700, color: p.onAccentSoft)),
+                    const SizedBox(height: 2),
+                    Text('Ketuk buat ubah target',
+                        style: TextStyle(fontSize: 12, color: p.onAccentSoft.withValues(alpha: 0.75))),
+                  ],
+                ),
+              ),
+              Container(
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: p.bg,
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.local_fire_department_rounded,
+                        size: 18, color: streak > 0 ? const Color(0xFFE8772E) : p.muted),
+                    const SizedBox(width: 4),
+                    Text('$streak hari',
+                        style: TextStyle(fontWeight: FontWeight.w700, color: p.text)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Cover extends StatelessWidget {
