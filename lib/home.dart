@@ -2,8 +2,10 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'extras.dart';
 import 'reader.dart';
 import 'store.dart';
 
@@ -49,6 +51,109 @@ class _HomePageState extends State<HomePage> {
         const SnackBar(content: Text('Gagal menambah PDF, coba file lain')),
       );
     }
+  }
+
+  Future<void> _bookMenu(String path) async {
+    final act = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(Store.title(path),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 16),
+            FilledButton.tonalIcon(
+              onPressed: () => Navigator.pop(ctx, 'rename'),
+              icon: const Icon(Icons.edit_rounded),
+              label: const Text('Ganti judul'),
+              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.pop(ctx, 'delete'),
+              icon: const Icon(Icons.delete_outline_rounded),
+              label: const Text('Hapus dari rak'),
+              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (act == 'rename') await _rename(path);
+    if (act == 'delete') await _confirmDelete(path);
+  }
+
+  Future<void> _rename(String path) async {
+    final ctrl = TextEditingController(text: Store.title(path));
+    final t = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Ganti judul'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: InputDecoration(hintText: 'Contoh: ${Store.fileTitle(path)}'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          OutlinedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: const Text('Simpan')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (t == null) return;
+    await Store.setTitle(path, t);
+    if (mounted) setState(() {});
+  }
+
+  void _startReview(List<String> books) {
+    final cards = [
+      for (final b in books)
+        for (final n in Store.notes(b))
+          if (n.text.trim().isNotEmpty) ReviewCard(b, n)
+    ];
+    if (cards.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Belum ada catatan berisi buat direview')));
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => ReviewPage(
+          cards: cards,
+          onOpen: (book, page) {
+            Navigator.pop(ctx);
+            _open(book, page: page);
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _copyNotes(List<String> books) async {
+    final buf = StringBuffer();
+    for (final b in books) {
+      final notes = Store.notes(b)..sort((a, c) => a.page.compareTo(c.page));
+      if (notes.isEmpty) continue;
+      buf.writeln('# ${Store.title(b)}');
+      for (final n in notes) {
+        if (n.text.trim().isEmpty) continue;
+        buf.writeln('- (hal ${n.page + 1}) ${n.text.trim()}');
+      }
+      buf.writeln();
+    }
+    await Clipboard.setData(ClipboardData(text: buf.toString().trim()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Catatan disalin, tinggal tempel di mana aja')));
   }
 
   Future<void> _confirmDelete(String path) async {
@@ -247,7 +352,7 @@ class _HomePageState extends State<HomePage> {
                 InkWell(
                   borderRadius: BorderRadius.circular(8),
                   onTap: () => _open(b),
-                  onLongPress: () => _confirmDelete(b),
+                  onLongPress: () => _bookMenu(b),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -301,6 +406,28 @@ class _HomePageState extends State<HomePage> {
             text: 'Belum ada catatan.\nTempel sticky note waktu baca buku.',
           )
         else ...[
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => _startReview(shown),
+                  icon: const Icon(Icons.style_rounded, size: 20),
+                  label: const Text('Review'),
+                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _copyNotes(shown),
+                  icon: const Icon(Icons.copy_rounded, size: 20),
+                  label: const Text('Salin semua'),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(

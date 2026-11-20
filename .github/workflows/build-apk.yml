@@ -83,7 +83,7 @@ jobs:
       - name: Build APK
         run: |
           set -o pipefail
-          flutter build apk --release 2>&1 | tee build.log
+          flutter build apk --release --split-per-abi 2>&1 | tee build.log
 
       - name: Kirim error build ke annotations
         if: failure()
@@ -94,17 +94,20 @@ jobs:
           tail -40 build.log | sed ':a;N;$!ba;s/\n/%0A/g' | xargs -0 -I{} echo "::error title=tail::{}"
 
       - name: Rename APK
-        run: cp build/app/outputs/flutter-apk/app-release.apk Leaf.apk
+        run: |
+          ls -la build/app/outputs/flutter-apk/
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk Leaf.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk Leaf-hp-lama-32bit.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: Leaf-apk
-          path: Leaf.apk
+          path: Leaf*.apk
 
       - name: Buat Release biar gampang diunduh dari HP
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ github.run_number }}" Leaf.apk \
+          gh release create "v${{ github.run_number }}" Leaf.apk Leaf-hp-lama-32bit.apk \
             --title "Leaf build ${{ github.run_number }}" \
-            --notes "APK otomatis dari commit ${{ github.sha }}"
+            --notes "Install Leaf.apk (HP 64-bit, hampir semua HP sekarang). Leaf-hp-lama-32bit.apk cuma buat HP lama. Commit ${{ github.sha }}"

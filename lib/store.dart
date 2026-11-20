@@ -262,7 +262,7 @@ class Store {
     final list = sp.getStringList('books') ?? [];
     list.remove(p);
     await sp.setStringList('books', list);
-    for (final k in ['notes', 'marks', 'last', 'count', 'ink']) {
+    for (final k in ['notes', 'marks', 'last', 'count', 'ink', 'title']) {
       await sp.remove('$k::$p');
     }
     if (sp.getString('opened') == p) await sp.remove('opened');
@@ -271,7 +271,15 @@ class Store {
     } catch (_) {}
   }
 
-  static String title(String p) => p
+  static String title(String p) {
+    final custom = sp.getString('title::$p');
+    if (custom != null && custom.trim().isNotEmpty) return custom;
+    return fileTitle(p);
+  }
+
+  static Future<void> setTitle(String p, String t) => sp.setString('title::$p', t.trim());
+
+  static String fileTitle(String p) => p
       .split(Platform.pathSeparator)
       .last
       .replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '')

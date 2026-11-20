@@ -7,18 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:page_flip/page_flip.dart';
 import 'package:pdfx/pdfx.dart';
 
+import 'extras.dart';
 import 'sheets.dart';
 import 'store.dart';
 
 enum Mode { read, pen, highlight }
 
-// halaman terang -> gelap hangat waktu mode gelap
-const _darkPage = ColorFilter.matrix(<double>[
-  -0.78, 0, 0, 0, 225, //
-  0, -0.78, 0, 0, 228, //
-  0, 0, -0.77, 0, 220, //
-  0, 0, 0, 1, 0,
-]);
 
 class ReaderPage extends StatefulWidget {
   const ReaderPage({super.key, required this.path, this.openAt});
@@ -39,6 +33,7 @@ class _ReaderPageState extends State<ReaderPage> {
   double _ratio = 0.707; // lebar / tinggi halaman
   List<Widget> _pages = const [];
   final Map<int, Future<Uint8List>> _cache = {};
+  final Map<int, Future<Uint8List>> _thumbs = {};
   Future<void> _lock = Future.value();
 
   List<Note> _notes = [];
@@ -95,13 +90,16 @@ class _ReaderPageState extends State<ReaderPage> {
 
   // ---------------------------------------------------------------- render
 
-  Future<Uint8List> _render(int i) {
-    return _cache.putIfAbsent(i, () {
+  Future<Uint8List> _render(int i) => _renderAt(i, 1400, _cache);
+  Future<Uint8List> _thumb(int i) => _renderAt(i, 260, _thumbs);
+
+  Future<Uint8List> _renderAt(int i, double width, Map<int, Future<Uint8List>> cache) {
+    return cache.putIfAbsent(i, () {
       final c = Completer<Uint8List>();
       _lock = _lock.then((_) async {
         try {
           final page = await _doc!.getPage(i + 1);
-          final scale = 1400 / page.width;
+          final scale = width / page.width;
           final img = await page.render(
             width: page.width * scale,
             height: page.height * scale,
@@ -112,7 +110,7 @@ class _ReaderPageState extends State<ReaderPage> {
           if (img == null) throw Exception('render');
           c.complete(img.bytes);
         } catch (e) {
-          _cache.remove(i);
+          cache.remove(i);
           c.completeError(e);
         }
       });
@@ -135,7 +133,7 @@ class _ReaderPageState extends State<ReaderPage> {
           return Image.memory(snap.data!, fit: BoxFit.fill, gaplessPlayback: true);
         },
       );
-      if (dark) img = ColorFiltered(colorFilter: _darkPage, child: img);
+      if (dark) img = ColorFiltered(colorFilter: darkPageFilter, child: img);
       return Container(color: dark ? const Color(0xFF1A1C19) : Colors.white, child: img);
     });
   }
@@ -194,43 +192,33 @@ class _ReaderPageState extends State<ReaderPage> {
     await Store.saveMarks(_path, _marks);
   }
 
-  void _showMarks() {
-    final marks = _marks.toList()..sort();
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (ctx) {
-        final p = Pal.of(ctx);
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Tab penanda',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: p.text)),
-              const SizedBox(height: 14),
-              if (marks.isEmpty)
-                Text('Belum ada tab. Tap ikon penanda di atas buat nandain halaman.',
-                    style: TextStyle(color: p.muted, height: 1.5))
-              else
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final m in marks)
-                      FilledButton.tonal(
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          _jump(m);
-                        },
-                        child: Text('Hal ${m + 1}'),
-                      ),
-                  ],
-                ),
-            ],
-          ),
-        );
-      },
+  Future<void> _openGrid() async {
+    final noted = {for (final n in _notes) n.page};
+    final i = await Navigator.push<int>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PageGridPage(
+          count: _count,
+          current: _current,
+          thumb: _thumb,
+          marks: _marks,
+          notedPages: noted,
+        ),
+      ),
+    );
+    if (i != null) _jump(i);
+  }
+
+  void _openZoom() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) => ZoomPage(
+          image: _render(_current),
+          page: _current,
+          dark: Theme.of(context).brightness == Brightness.dark,
+        ),
+      ),
     );
   }
 
@@ -362,9 +350,14 @@ class _ReaderPageState extends State<ReaderPage> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Daftar tab',
-            onPressed: _showMarks,
-            icon: const Icon(Icons.bookmarks_outlined),
+            tooltip: 'Semua halaman',
+            onPressed: _openGrid,
+            icon: const Icon(Icons.grid_view_rounded),
+          ),
+          IconButton(
+            tooltip: 'Perbesar halaman',
+            onPressed: _openZoom,
+            icon: const Icon(Icons.zoom_in_rounded),
           ),
           IconButton(
             tooltip: marked ? 'Lepas tab' : 'Pasang tab',
