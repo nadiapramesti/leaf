@@ -49,6 +49,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   double? _slide;
   Size _pageSize = Size.zero;
 
+  /// naik tiap note/coretan berubah, supaya isi halaman digambar ulang
+  final _rev = ValueNotifier<int>(0);
+  void _bump() => _rev.value++;
+
   bool _full = false;
   Offset? _tapDown;
   DateTime? _tapAt;
@@ -131,6 +135,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     _focus?.cancel();
     _awake(false);
     _doc?.close();
+    _rev.dispose();
     super.dispose();
   }
 
@@ -180,18 +185,68 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         },
       );
       final child = img;
-      return ValueListenableBuilder<int>(
-        valueListenable: Store.paper,
-        builder: (_, mode, __) {
-          final f = pageFilter(mode, dark);
-          return Container(
-            color: pageBg(mode, dark),
-            child: f == null ? child : ColorFiltered(colorFilter: f, child: child),
-          );
-        },
+      final pen = Pal.of(context).pen;
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          ValueListenableBuilder<int>(
+            valueListenable: Store.paper,
+            builder: (_, mode, __) {
+              final f = pageFilter(mode, dark);
+              return Container(
+                color: pageBg(mode, dark),
+                child: f == null ? child : ColorFiltered(colorFilter: f, child: child),
+              );
+            },
+          ),
+          // note & coretan nempel di halaman, jadi ikut melengkung waktu dibalik
+          ValueListenableBuilder<int>(
+            valueListenable: _rev,
+            builder: (_, __, ___) => LayoutBuilder(builder: (_, box) {
+              final s = Size(box.maxWidth, box.maxHeight);
+              final noteW = (s.width * 0.36).clamp(110.0, 180.0);
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _InkPainter(_ink.where((k) => k.page == i).toList(), pen),
+                    ),
+                  ),
+                  for (final n in _notes.where((n) => n.page == i))
+                    Positioned(
+                      left: n.x * s.width,
+                      top: n.y * s.height,
+                      child: _noteCard(n, noteW),
+                    ),
+                ],
+              );
+            }),
+          ),
+        ],
       );
     });
   }
+
+  Widget _noteCard(Note n, double noteW) => Transform.rotate(
+        angle: -0.03,
+        child: Container(
+          width: noteW,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Color(n.color),
+            borderRadius: BorderRadius.circular(3),
+            boxShadow: const [
+              BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 6)),
+            ],
+          ),
+          child: Text(
+            n.text.isEmpty ? '(kosong)' : n.text,
+            maxLines: 7,
+            overflow: TextOverflow.ellipsis,
+            style: noteStyle(n.font, size: 12.5),
+          ),
+        ),
+      );
 
   void _jump(int i) {
     final t = i.clamp(0, _count - 1);
@@ -221,6 +276,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       ..font = r.font
       ..color = r.color;
     setState(() => _notes.add(n));
+    _bump();
     await Store.saveNotes(_path, _notes);
   }
 
@@ -237,6 +293,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           ..color = r.color;
       }
     });
+    _bump();
     await Store.saveNotes(_path, _notes);
   }
 
@@ -486,6 +543,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         k.page == _current && k.pts.any((p) => (p - n).distance < 0.025));
     if (_ink.length != before) {
       setState(() {});
+      _bump();
       Store.saveInk(_path, _ink);
     }
   }
@@ -526,6 +584,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       _live = null;
       if (s.pts.length > 1) _ink.add(s);
     });
+    _bump();
     Store.saveInk(_path, _ink);
   }
 
@@ -533,6 +592,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     final i = _ink.lastIndexWhere((k) => k.page == _current);
     if (i < 0) return;
     setState(() => _ink.removeAt(i));
+    _bump();
     Store.saveInk(_path, _ink);
   }
 
@@ -566,6 +626,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       ));
       _mode = Mode.read;
     });
+    _bump();
     await Store.saveInk(_path, _ink);
     await Store.saveNotes(_path, _notes);
   }
@@ -755,10 +816,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
       );
 
   Widget _inkLayer(Size s, Pal p) {
-    final strokes = [
-      ..._ink.where((k) => k.page == _current),
-      if (_live != null) _live!,
-    ];
+    final strokes = [if (_live != null) _live!];
     final paint = CustomPaint(size: s, painter: _InkPainter(strokes, p.pen));
     if (_mode == Mode.read) return IgnorePointer(child: paint);
     return Listener(
@@ -785,28 +843,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               onPanUpdate: (d) => setState(() {
                 n.x = (n.x + d.delta.dx / s.width).clamp(0.0, 1 - noteW / s.width);
                 n.y = (n.y + d.delta.dy / s.height).clamp(0.0, 0.92);
+                _bump();
               }),
               onPanEnd: (_) => Store.saveNotes(_path, _notes),
-              child: Transform.rotate(
-                angle: -0.03,
-                child: Container(
-                  width: noteW,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Color(n.color),
-                    borderRadius: BorderRadius.circular(3),
-                    boxShadow: const [
-                      BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 6)),
-                    ],
-                  ),
-                  child: Text(
-                    n.text.isEmpty ? '(kosong)' : n.text,
-                    maxLines: 7,
-                    overflow: TextOverflow.ellipsis,
-                    style: noteStyle(n.font, size: 12.5),
-                  ),
-                ),
-              ),
+              // tak terlihat: yang kelihatan digambar di dalam halaman
+              child: Opacity(opacity: 0, child: _noteCard(n, noteW)),
             ),
           ),
         ),
