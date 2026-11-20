@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_digital_ink_recognition/google_mlkit_digital_ink_recognition.dart'
     as mk;
@@ -95,6 +98,7 @@ Future<NoteResult?> showNoteSheet(BuildContext context, Note n, {bool isNew = fa
   return showModalBottomSheet<NoteResult>(
     context: context,
     isScrollControlled: true,
+    enableDrag: false,
     builder: (_) => _NoteSheet(note: n, isNew: isNew),
   );
 }
@@ -112,11 +116,24 @@ class _NoteSheetState extends State<_NoteSheet> {
   late final _ctrl = TextEditingController(text: widget.note.text);
   late String _font = widget.note.font;
   late int _color = widget.note.color;
+  bool _pad = false;
 
   @override
   void dispose() {
     _ctrl.dispose();
     super.dispose();
+  }
+
+  void _openPad() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _pad = true);
+  }
+
+  void _append(String t) {
+    final cur = _ctrl.text.trimRight();
+    _ctrl.text = cur.isEmpty ? t : '$cur $t';
+    _ctrl.selection = TextSelection.collapsed(offset: _ctrl.text.length);
+    setState(() {});
   }
 
   @override
@@ -125,6 +142,7 @@ class _NoteSheetState extends State<_NoteSheet> {
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 0, 20, MediaQuery.of(context).viewInsets.bottom + 20),
       child: SingleChildScrollView(
+        physics: _pad ? const NeverScrollableScrollPhysics() : null,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -141,17 +159,47 @@ class _NoteSheetState extends State<_NoteSheet> {
               ],
             ),
             const SizedBox(height: 16),
-            _label(context, 'Isi catatan'),
-            TextField(
+            Row(
+              children: [
+                Expanded(child: _label(context, 'Isi catatan')),
+                if (!_pad)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: FilledButton.tonalIcon(
+                      onPressed: _openPad,
+                      icon: const Icon(Icons.draw_rounded, size: 18),
+                      label: const Text('Tulis tangan'),
+                      style: FilledButton.styleFrom(minimumSize: const Size(0, 38)),
+                    ),
+                  ),
+              ],
+            ),
+            if (_pad) ...[
+              HandwritingPad(onText: _append, onClose: () => setState(() => _pad = false)),
+              const SizedBox(height: 10),
+            ],
+            Listener(
+              onPointerDown: (e) {
+                if (e.kind == PointerDeviceKind.stylus ||
+                    e.kind == PointerDeviceKind.invertedStylus) {
+                  _openPad();
+                }
+              },
+              child: TextField(
               controller: _ctrl,
-              autofocus: widget.isNew,
+              autofocus: widget.isNew && !_pad,
+              readOnly: _pad,
+              stylusHandwritingEnabled: false,
               maxLines: 4,
               minLines: 3,
               keyboardType: TextInputType.multiline,
               textCapitalization: TextCapitalization.sentences,
               style: noteStyle(_font, size: 15, color: p.text),
-              decoration: const InputDecoration(
-                  hintText: 'Contoh: rumus ini sering keluar di ujian'),
+              decoration: InputDecoration(
+                  hintText: _pad
+                      ? 'Hasil tulisan tangan muncul di sini'
+                      : 'Contoh: rumus ini sering keluar di ujian'),
+            ),
             ),
             const SizedBox(height: 16),
             _label(context, 'Gaya huruf'),
@@ -374,4 +422,244 @@ class _ConvertSheetState extends State<_ConvertSheet> {
       ),
     );
   }
+}
+
+
+// ------------------------------------------------------------------ pengenal tulisan
+
+Future<String> recognizeInk(List<InkStroke> strokes, Size size, String lang) async {
+  final mm = mk.DigitalInkRecognizerModelManager();
+  if (!await mm.isModelDownloaded(lang)) {
+    await mm.downloadModel(lang, isWifiRequired: false);
+  }
+  final ink = mk.Ink();
+  for (final s in strokes) {
+    final st = mk.Stroke();
+    for (var i = 0; i < s.pts.length; i++) {
+      st.points.add(mk.StrokePoint(
+        x: s.pts[i].dx * size.width,
+        y: s.pts[i].dy * size.height,
+        t: s.ts[i],
+      ));
+    }
+    ink.strokes.add(st);
+  }
+  final rec = mk.DigitalInkRecognizer(languageCode: lang);
+  try {
+    final c = await rec.recognize(ink);
+    return c.isNotEmpty ? c.first.text : '';
+  } finally {
+    await rec.close();
+  }
+}
+
+/// Papan tulis tangan: tulis pakai stylus/jari, jeda sebentar, otomatis jadi teks.
+class HandwritingPad extends StatefulWidget {
+  const HandwritingPad({super.key, required this.onText, required this.onClose});
+  final ValueChanged<String> onText;
+  final VoidCallback onClose;
+
+  @override
+  State<HandwritingPad> createState() => _HandwritingPadState();
+}
+
+class _HandwritingPadState extends State<HandwritingPad> {
+  final List<InkStroke> _strokes = [];
+  InkStroke? _live;
+  int? _pointer;
+  Timer? _wait;
+  bool _busy = false;
+  String? _msg;
+  Size _size = const Size(1, 1);
+  String _lang = Store.sp.getString('ink_lang') ?? 'id';
+
+  @override
+  void dispose() {
+    _wait?.cancel();
+    super.dispose();
+  }
+
+  Offset _n(Offset o) => Offset(
+      (o.dx / _size.width).clamp(0.0, 1.0), (o.dy / _size.height).clamp(0.0, 1.0));
+
+  void _down(PointerDownEvent e) {
+    if (_pointer != null || _busy) return;
+    _wait?.cancel();
+    _pointer = e.pointer;
+    setState(() {
+      _msg = null;
+      _live = InkStroke(page: 0, tool: 'pen')..add(_n(e.localPosition), e.timeStamp.inMilliseconds);
+    });
+  }
+
+  void _move(PointerMoveEvent e) {
+    if (e.pointer != _pointer || _live == null) return;
+    setState(() => _live!.add(_n(e.localPosition), e.timeStamp.inMilliseconds));
+  }
+
+  void _up(PointerEvent e) {
+    if (e.pointer != _pointer) return;
+    _pointer = null;
+    final s = _live;
+    setState(() {
+      _live = null;
+      if (s != null && s.pts.length > 1) _strokes.add(s);
+    });
+    _wait?.cancel();
+    _wait = Timer(const Duration(milliseconds: 1100), _recognize);
+  }
+
+  Future<void> _recognize() async {
+    if (_strokes.isEmpty || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final text = await recognizeInk(List.of(_strokes), _size, _lang);
+      if (!mounted) return;
+      setState(() {
+        _strokes.clear();
+        _busy = false;
+        if (text.trim().isEmpty) _msg = 'Belum kebaca, coba tulis lebih besar';
+      });
+      if (text.trim().isNotEmpty) widget.onText(text.trim());
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _msg = 'Pertama kali butuh internet buat unduh model bahasa';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Pal.of(context);
+    final shown = [..._strokes, if (_live != null) _live!];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          height: 170,
+          decoration: BoxDecoration(
+            color: p.surface,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: p.accent, width: 2),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: LayoutBuilder(builder: (_, box) {
+            _size = Size(box.maxWidth, box.maxHeight);
+            return Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: _down,
+              onPointerMove: _move,
+              onPointerUp: _up,
+              onPointerCancel: _up,
+              // klaim geser supaya sheet nggak ikut kegeser waktu nulis
+              child: RawGestureDetector(
+                gestures: {
+                  _AlwaysWinPan: GestureRecognizerFactoryWithHandlers<_AlwaysWinPan>(
+                    () => _AlwaysWinPan(),
+                    (r) => r
+                      ..onStart = (_) {}
+                      ..onUpdate = (_) {},
+                  ),
+                },
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: CustomPaint(painter: _PadPainter(shown, p.pen)),
+                    ),
+                    if (shown.isEmpty)
+                      Center(
+                        child: Text(_msg ?? 'Tulis di sini pakai stylus',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: p.muted, fontSize: 15)),
+                      ),
+                    if (_busy)
+                      Positioned(
+                        top: 10,
+                        right: 10,
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2.4, color: p.accent),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            for (final e in _langs.entries)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: ChoiceChip(
+                  showCheckmark: false,
+                  visualDensity: VisualDensity.compact,
+                  selected: _lang == e.key,
+                  label: Text(e.value),
+                  onSelected: (_) {
+                    setState(() => _lang = e.key);
+                    Store.sp.setString('ink_lang', e.key);
+                  },
+                ),
+              ),
+            const Spacer(),
+            IconButton.outlined(
+              tooltip: 'Hapus coretan',
+              onPressed: () => setState(() {
+                _strokes.clear();
+                _msg = null;
+              }),
+              icon: const Icon(Icons.backspace_outlined, size: 20),
+            ),
+            const SizedBox(width: 6),
+            IconButton.filledTonal(
+              tooltip: 'Pakai keyboard',
+              onPressed: widget.onClose,
+              icon: const Icon(Icons.keyboard_rounded, size: 20),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _AlwaysWinPan extends PanGestureRecognizer {
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    super.addAllowedPointer(event);
+    resolve(GestureDisposition.accepted);
+  }
+}
+
+class _PadPainter extends CustomPainter {
+  _PadPainter(this.strokes, this.color);
+  final List<InkStroke> strokes;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    for (final s in strokes) {
+      if (s.pts.isEmpty) continue;
+      final path = Path()..moveTo(s.pts[0].dx * size.width, s.pts[0].dy * size.height);
+      for (final o in s.pts.skip(1)) {
+        path.lineTo(o.dx * size.width, o.dy * size.height);
+      }
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PadPainter old) => true;
 }
