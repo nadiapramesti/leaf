@@ -66,6 +66,19 @@ jobs:
               '}' > /tmp/fix.gradle
           fi
           grep -q 'compileSdk = 36\|compileSdkVersion 36' $G || { cat /tmp/fix.gradle $G > /tmp/g && mv /tmp/g $G; }
+          # matikan R8 (bisa ngebuang kode ML Kit) di build release
+          if [ -f android/app/build.gradle.kts ]; then
+            A=android/app/build.gradle.kts
+            grep -q 'isMinifyEnabled = false' $A || sed -i 's/signingConfig = signingConfigs.getByName("debug")/signingConfig = signingConfigs.getByName("debug")\n            isMinifyEnabled = false\n            isShrinkResources = false/' $A
+          else
+            A=android/app/build.gradle
+            grep -q 'minifyEnabled false' $A || sed -i 's/signingConfig signingConfigs.debug/signingConfig signingConfigs.debug\n            minifyEnabled false\n            shrinkResources false/' $A
+          fi
+          cat $A
+          # matikan Impeller (crash di sebagian GPU tablet), pakai renderer lama yang stabil
+          grep -q 'EnableImpeller' $M || sed -i 's#</application>#    <meta-data android:name="io.flutter.embedding.android.EnableImpeller" android:value="false"/>\n    </application>#' $M
+          # kunci tanda tangan tetap, biar update bisa install timpa
+          mkdir -p ~/.android && cp tool/debug.keystore ~/.android/debug.keystore
           cat $G
           cat $M
 
