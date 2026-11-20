@@ -218,6 +218,26 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                       top: n.y * s.height,
                       child: _noteCard(n, noteW),
                     ),
+                  // pita penanda, turun dari atas waktu dipasang
+                  Positioned(
+                    key: const ValueKey('ribbon'),
+                    top: 0,
+                    right: s.width * 0.08,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 420),
+                      reverseDuration: const Duration(milliseconds: 220),
+                      transitionBuilder: (child, a) => SizeTransition(
+                        sizeFactor: CurvedAnimation(
+                            parent: a, curve: Curves.easeOutBack, reverseCurve: Curves.easeIn),
+                        axisAlignment: -1,
+                        child: child,
+                      ),
+                      child: _marks.contains(i)
+                          ? _Ribbon(key: const ValueKey('on'), color: Pal.of(context).accent,
+                              width: (s.width * 0.06).clamp(26.0, 40.0))
+                          : const SizedBox(key: ValueKey('off'), width: 1, height: 0),
+                    ),
+                  ),
                 ],
               );
             }),
@@ -298,9 +318,19 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   Future<void> _toggleMark() async {
+    final adding = !_marks.contains(_current);
+    HapticFeedback.lightImpact();
     setState(() {
       if (!_marks.remove(_current)) _marks.add(_current);
     });
+    _bump();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(adding ? 'Tab dipasang di hal ${_current + 1}' : 'Tab dilepas'),
+        duration: const Duration(milliseconds: 1200),
+        behavior: SnackBarBehavior.floating,
+      ));
     await Store.saveMarks(_path, _marks);
   }
 
@@ -673,8 +703,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           IconButton(
             tooltip: marked ? 'Lepas tab' : 'Pasang tab',
             onPressed: _toggleMark,
-            icon: Icon(marked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-                color: marked ? p.accent : null),
+            icon: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 300),
+              transitionBuilder: (c, a) => ScaleTransition(
+                  scale: CurvedAnimation(parent: a, curve: Curves.easeOutBack), child: c),
+              child: Icon(marked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                  key: ValueKey(marked), color: marked ? p.accent : null),
+            ),
           ),
           PopupMenuButton<String>(
             tooltip: 'Lainnya',
@@ -1042,4 +1077,43 @@ class _InkPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _InkPainter old) => true;
+}
+
+
+/// Pita penanda halaman dengan ujung bawah berlekuk.
+class _Ribbon extends StatelessWidget {
+  const _Ribbon({super.key, required this.color, required this.width});
+  final Color color;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipPath(
+      clipper: _RibbonClip(),
+      child: Container(
+        width: width,
+        height: width * 2.1,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [color, Color.lerp(color, Colors.black, 0.18)!],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RibbonClip extends CustomClipper<Path> {
+  @override
+  Path getClip(Size s) => Path()
+    ..lineTo(s.width, 0)
+    ..lineTo(s.width, s.height)
+    ..lineTo(s.width / 2, s.height - s.width * 0.45)
+    ..lineTo(0, s.height)
+    ..close();
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
 }
