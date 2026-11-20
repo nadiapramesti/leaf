@@ -57,7 +57,8 @@ const sepiaPageFilter = ColorFilter.matrix(<double>[
   0, 0, 0, 1, 0,
 ]);
 
-int effectivePaper(int mode, bool dark) => mode == 0 ? (dark ? 3 : 1) : mode;
+/// 0/1 = warna asli PDF (default, juga di mode gelap), 2 = sepia, 3 = gelap
+int effectivePaper(int mode, bool dark) => mode <= 1 ? 1 : mode;
 
 ColorFilter? pageFilter(int mode, bool dark) {
   switch (effectivePaper(mode, dark)) {

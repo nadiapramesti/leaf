@@ -49,6 +49,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   double? _slide;
   Size _pageSize = Size.zero;
 
+  bool _full = false;
+  Offset? _tapDown;
+  DateTime? _tapAt;
+
   final Stopwatch _watch = Stopwatch();
   Timer? _tick;
   Timer? _focus;
@@ -121,6 +125,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (_full) SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _flush();
     _tick?.cancel();
     _focus?.cancel();
@@ -272,6 +277,38 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     );
   }
 
+  // ---------------------------------------------------------------- layar penuh
+
+  void _setFull(bool on) {
+    setState(() => _full = on);
+    SystemChrome.setEnabledSystemUIMode(
+        on ? SystemUiMode.immersiveSticky : SystemUiMode.edgeToEdge);
+    if (on && !(Store.sp.getBool('full_hint') ?? false)) {
+      Store.sp.setBool('full_hint', true);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Ketuk tengah halaman buat munculin tombol lagi'),
+        duration: Duration(seconds: 2),
+      ));
+    }
+  }
+
+  /// tap singkat di tengah halaman (bukan di note) = buka/tutup layar penuh
+  void _maybeToggle(PointerUpEvent e, Size s) {
+    final d = _tapDown, t = _tapAt;
+    _tapDown = null;
+    if (d == null || t == null || _mode != Mode.read) return;
+    if ((e.localPosition - d).distance > 12) return;
+    if (DateTime.now().difference(t).inMilliseconds > 280) return;
+    final x = d.dx / s.width;
+    if (x < 0.25 || x > 0.75) return; // pinggir = area balik halaman
+    final noteW = (s.width * 0.36).clamp(110.0, 180.0);
+    for (final n in _notes.where((n) => n.page == _current)) {
+      final r = Rect.fromLTWH(n.x * s.width, n.y * s.height, noteW, 160);
+      if (r.contains(d)) return;
+    }
+    _setFull(!_full);
+  }
+
   // ---------------------------------------------------------------- fokus & kertas
 
   Future<void> _pickFocus() async {
@@ -363,10 +400,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   }
 
   Future<void> _pickPaper() async {
-    const labels = ['Otomatis', 'Putih', 'Sepia', 'Gelap'];
+    const values = [0, 2, 3];
+    const labels = ['Asli', 'Sepia', 'Gelap'];
     const icons = [
-      Icons.brightness_auto_rounded,
-      Icons.light_mode_rounded,
+      Icons.picture_as_pdf_rounded,
       Icons.coffee_rounded,
       Icons.dark_mode_rounded,
     ];
@@ -385,20 +422,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 Text('Mode kertas',
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: p.text)),
                 const SizedBox(height: 6),
-                Text('Otomatis ikut tema app. Sepia paling nyaman buat baca lama.',
+                Text('Asli = warna PDF apa adanya. Sepia nyaman buat baca lama, Gelap buat malam.',
                     style: TextStyle(color: p.muted)),
                 const SizedBox(height: 16),
                 GridView.count(
-                  crossAxisCount: 4,
+                  crossAxisCount: 3,
                   shrinkWrap: true,
                   crossAxisSpacing: 10,
                   childAspectRatio: 0.9,
                   physics: const NeverScrollableScrollPhysics(),
                   children: [
-                    for (var i = 0; i < 4; i++)
+                    for (var i = 0; i < 3; i++)
                       _paperButton(
-                        selected: mode == i,
-                        onPressed: () => Store.setPaper(i),
+                        selected: effectivePaper(mode, false) == effectivePaper(values[i], false),
+                        onPressed: () => Store.setPaper(values[i]),
                         icon: icons[i],
                         label: labels[i],
                       ),
@@ -546,9 +583,14 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     }
     final marked = _marks.contains(_current);
 
-    return Scaffold(
-      backgroundColor: p.readerBg,
-      appBar: AppBar(
+    return PopScope(
+      canPop: !_full,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _full) _setFull(false);
+      },
+      child: Scaffold(
+      backgroundColor: _full ? Colors.black : p.readerBg,
+      appBar: _full ? null : AppBar(
         titleSpacing: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -577,11 +619,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             tooltip: 'Lainnya',
             icon: const Icon(Icons.more_vert_rounded),
             onSelected: (v) {
+              if (v == 'full') _setFull(true);
               if (v == 'zoom') _openZoom();
               if (v == 'paper') _pickPaper();
               if (v == 'focus') _pickFocus();
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(
+                  value: 'full',
+                  child: ListTile(
+                      leading: Icon(Icons.fullscreen_rounded), title: Text('Layar penuh'))),
               PopupMenuItem(
                   value: 'zoom',
                   child: ListTile(
@@ -604,7 +651,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         ),
       ),
       body: LayoutBuilder(builder: (_, box) {
-        const pad = 12.0;
+        final pad = _full ? 0.0 : 12.0;
         final maxW = box.maxWidth - pad * 2;
         final maxH = box.maxHeight - pad * 2;
         var w = maxW;
@@ -615,11 +662,20 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         }
         final size = Size(w, h);
         _pageSize = size;
-        return Center(
+        return Stack(
+          children: [
+            Center(
           child: SizedBox(
             width: w,
             height: h,
-            child: Stack(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (e) {
+                _tapDown = e.localPosition;
+                _tapAt = DateTime.now();
+              },
+              onPointerUp: (e) => _maybeToggle(e, size),
+              child: Stack(
               children: [
                 PageFlipWidget(
                   key: ValueKey(_flipVersion),
@@ -637,10 +693,33 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                 ..._noteLayer(size),
               ],
             ),
+            ),
           ),
+        ),
+            if (_full)
+              Positioned(
+                bottom: 14,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text('${_current + 1} / $_count',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         );
       }),
-      bottomNavigationBar: SafeArea(
+      bottomNavigationBar: _full ? null : SafeArea(
         child: Container(
           decoration: BoxDecoration(
             color: p.bg,
@@ -650,6 +729,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           child: _mode == Mode.read ? _readBar(p) : _writeBar(p),
         ),
       ),
+    ),
     );
   }
 
