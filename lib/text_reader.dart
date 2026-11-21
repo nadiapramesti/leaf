@@ -73,11 +73,7 @@ List<String> toParagraphs(String raw) {
       continue;
     }
     if (buf.isNotEmpty && _startsNew(l)) flush();
-    if (buf.endsWith('-') && RegExp(r'^[a-z]').hasMatch(l)) {
-      buf = buf.substring(0, buf.length - 1) + l;
-    } else {
-      buf = buf.isEmpty ? l : '$buf $l';
-    }
+    buf = buf.isEmpty ? l : joinWrap(buf, l);
     final short = l.length < maxLen * 0.78;
     final heading = l.length < 60 && l == l.toUpperCase() && RegExp(r'[A-Z]').hasMatch(l);
     if (heading || (short && RegExp(r'[.!?:"”)]$').hasMatch(l))) flush();
@@ -96,6 +92,24 @@ bool _startsNew(String l) =>
     speakerRe.hasMatch(l) || RegExp(r'^[“"‘«—–-]\s?\S').hasMatch(l);
 
 /// Baca huruf dari gambar halaman (offline), dipakai kalau teks PDF nggak bisa diambil.
+/// Sambung baris: kata yang dipenggal (di-↵lema) disatukan, tapi tanda hubung
+/// asli dipertahankan (e-mail, Miyae-san, pelan-pelan).
+const _keepAfterHyphen = {
+  'san', 'kun', 'chan', 'sama', 'sensei', 'senpai', 'dono', 'shi', 'tan', 'nee', 'nii',
+};
+
+String joinWrap(String buf, String next) {
+  if (!buf.endsWith('-') || !RegExp(r'^[a-zà-ÿ]').hasMatch(next)) return '$buf $next';
+  final head = buf.substring(0, buf.length - 1);
+  final prevWord = RegExp(r"([A-Za-zÀ-ÿ']+)$").firstMatch(head)?.group(1) ?? '';
+  final nextWord = RegExp(r"^([A-Za-zÀ-ÿ']+)").firstMatch(next)?.group(1) ?? '';
+  final keep = prevWord.length <= 1 ||
+      _keepAfterHyphen.contains(nextWord.toLowerCase()) ||
+      prevWord.toLowerCase() == nextWord.toLowerCase() ||
+      RegExp(r'-[A-Za-zÀ-ÿ]+$').hasMatch(head); // sudah ada tanda hubung lain (Yanaoka-san-…)
+  return keep ? '$buf$next' : '$head$next';
+}
+
 const figMark = '\u0001FIG';
 const fnMark = '\u0002FN';
 
@@ -126,7 +140,7 @@ class PageOcr {
         _cache = jsonDecode(await _cacheFile!.readAsString()) as Map<String, dynamic>;
       } catch (_) {}
     }
-    if (_cache['v'] != 5) _cache = {'v': 5}; // versi lama: belum ada gambar / dialog
+    if (_cache['v'] != 6) _cache = {'v': 6}; // versi lama: belum ada gambar / dialog
   }
 
   List<String>? cached(int i) {
@@ -331,10 +345,8 @@ class PageOcr {
           bufTop = row.r.top;
           speaker = speakerRe.hasMatch(t);
           buf = t;
-        } else if (buf.endsWith('-') && RegExp(r'^[a-z]').hasMatch(t)) {
-          buf = buf.substring(0, buf.length - 1) + t;
         } else {
-          buf = '$buf $t';
+          buf = joinWrap(buf, t);
         }
         prev = row;
       }
