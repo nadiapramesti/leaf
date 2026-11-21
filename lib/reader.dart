@@ -11,6 +11,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'extras.dart';
 import 'sheets.dart';
 import 'store.dart';
+import 'text_reader.dart';
 import 'turner.dart';
 
 enum Mode { read, pen, highlight }
@@ -334,6 +335,16 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
         behavior: SnackBarBehavior.floating,
       ));
     await Store.saveMarks(_path, _marks);
+  }
+
+  Future<void> _openText() async {
+    final r = await Navigator.push<int>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TextReaderPage(path: _path, count: _count, start: _current),
+      ),
+    );
+    if (r != null && r != _current && mounted) _jump(r);
   }
 
   Future<void> _openGrid() async {
@@ -764,6 +775,11 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: 'Mode teks (atur huruf)',
+            onPressed: _openText,
+            icon: const Icon(Icons.chrome_reader_mode_outlined),
+          ),
           IconButton(
             tooltip: 'Semua halaman',
             onPressed: _openGrid,

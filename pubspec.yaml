@@ -16,6 +16,7 @@ dependencies:
   google_fonts: ^6.2.1
   google_mlkit_digital_ink_recognition: ">=0.11.0 <1.0.0"
   wakelock_plus: ">=1.2.0 <2.0.0"
+  syncfusion_flutter_pdf: ">=26.1.35 <99.0.0"
 
 dev_dependencies:
   flutter_lints: ^4.0.0
