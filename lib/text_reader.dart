@@ -88,27 +88,6 @@ final speakerRe = RegExp(
 bool _startsNew(String l) =>
     speakerRe.hasMatch(l) || RegExp(r'^[“"‘«—–-]\s?\S').hasMatch(l);
 
-/// Paragraf dari baris-baris satu blok; dialog dipecah per pembicara.
-List<String> _joinBlock(List<String> lines) {
-  final out = <String>[];
-  var buf = '';
-  for (final raw in lines) {
-    final l = raw.trim();
-    if (l.isEmpty) continue;
-    if (buf.isNotEmpty && _startsNew(l)) {
-      out.add(buf);
-      buf = '';
-    }
-    if (buf.endsWith('-') && RegExp(r'^[a-z]').hasMatch(l)) {
-      buf = buf.substring(0, buf.length - 1) + l;
-    } else {
-      buf = buf.isEmpty ? l : '$buf $l';
-    }
-  }
-  if (buf.isNotEmpty) out.add(buf);
-  return out;
-}
-
 /// Baca huruf dari gambar halaman (offline), dipakai kalau teks PDF nggak bisa diambil.
 const figMark = '\u0001FIG';
 
@@ -131,7 +110,7 @@ class PageOcr {
         _cache = jsonDecode(await _cacheFile!.readAsString()) as Map<String, dynamic>;
       } catch (_) {}
     }
-    if (_cache['v'] != 3) _cache = {'v': 3}; // versi lama: belum ada gambar / dialog
+    if (_cache['v'] != 4) _cache = {'v': 4}; // versi lama: belum ada gambar / dialog
   }
 
   List<String>? cached(int i) {
@@ -240,15 +219,86 @@ class PageOcr {
       }
     }
 
-    // susun paragraf + gambar sesuai urutan dari atas
+    // susun paragraf + gambar sesuai urutan dari atas.
+    // Pakai baris OCR (bukan blok) lalu gabung yang sejajar kiri->kanan,
+    // supaya "Aku" di kolom kiri ketemu ": isi dialog" di kolom kanan.
     final items = <({double top, String text})>[];
+    final lines = <({Rect r, String t})>[];
     for (final b in blocks) {
-      final cx = b.boundingBox.center.dx * k / sw, cy = b.boundingBox.center.dy * k / sh;
-      if (figs.any((r) => r.contains(Offset(cx, cy)))) continue; // label di dalam denah
-      final parts = _joinBlock([for (final l in b.lines) l.text]);
-      for (var j = 0; j < parts.length; j++) {
-        items.add((top: b.boundingBox.top * k / sh + j * 1e-6, text: parts[j]));
+      for (final l in b.lines) {
+        final r = Rect.fromLTRB(l.boundingBox.left * k / sw, l.boundingBox.top * k / sh,
+            l.boundingBox.right * k / sw, l.boundingBox.bottom * k / sh);
+        if (figs.any((f) => f.contains(r.center))) continue; // label di dalam denah
+        final t = l.text.trim();
+        if (t.isEmpty || RegExp(r'^\d{1,4}$').hasMatch(t)) continue;
+        lines.add((r: r, t: t));
       }
+    }
+    lines.sort((a, b) => a.r.center.dy.compareTo(b.r.center.dy));
+
+    // kelompokkan jadi baris visual
+    final rows = <({Rect r, String t})>[];
+    var cur = <({Rect r, String t})>[];
+    void closeRow() {
+      if (cur.isEmpty) return;
+      cur.sort((a, b) => a.r.left.compareTo(b.r.left));
+      var box = cur.first.r;
+      for (final c in cur.skip(1)) {
+        box = box.expandToInclude(c.r);
+      }
+      rows.add((r: box, t: cur.map((c) => c.t).join(' ')));
+      cur = [];
+    }
+
+    for (final l in lines) {
+      if (cur.isNotEmpty) {
+        final cy = cur.map((c) => c.r.center.dy).reduce((a, b) => a + b) / cur.length;
+        final hgt = cur.map((c) => c.r.height).reduce((a, b) => a + b) / cur.length;
+        if ((l.r.center.dy - cy).abs() > hgt * 0.6) closeRow();
+      }
+      cur.add(l);
+    }
+    closeRow();
+
+    // baris -> paragraf
+    if (rows.isNotEmpty) {
+      final minLeft = rows.map((r) => r.r.left).reduce((a, b) => a < b ? a : b);
+      final maxRight = rows.map((r) => r.r.right).reduce((a, b) => a > b ? a : b);
+      final lineH = rows.map((r) => r.r.height).reduce((a, b) => a + b) / rows.length;
+      var buf = '';
+      var bufTop = 0.0;
+      var speaker = false;
+      ({Rect r, String t})? prev;
+      void flush() {
+        final t = buf.trim();
+        if (t.isNotEmpty) items.add((top: bufTop, text: t));
+        buf = '';
+      }
+
+      for (final row in rows) {
+        final t = row.t;
+        var newPara = buf.isEmpty || _startsNew(t);
+        if (!newPara && prev != null) {
+          final gap = row.r.top - prev.r.bottom;
+          final prevShort = prev.r.right < maxRight - 0.08 && RegExp(r'[.!?"”)…]$').hasMatch(prev.t);
+          final indented = row.r.left > minLeft + 0.025;
+          if (gap > lineH * 1.1) newPara = true;
+          if (!speaker && (prevShort || indented)) newPara = true;
+          if (speaker && prevShort && !indented) newPara = true;
+        }
+        if (newPara) {
+          flush();
+          bufTop = row.r.top;
+          speaker = speakerRe.hasMatch(t);
+          buf = t;
+        } else if (buf.endsWith('-') && RegExp(r'^[a-z]').hasMatch(t)) {
+          buf = buf.substring(0, buf.length - 1) + t;
+        } else {
+          buf = '$buf $t';
+        }
+        prev = row;
+      }
+      flush();
     }
     if (figs.isNotEmpty) {
       final keep = File('$_dir${Platform.pathSeparator}ocrimg_${path.hashCode.abs()}_$i.jpg');
