@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -93,22 +94,28 @@ String _joinLines(List<String> lines) {
 }
 
 /// Baca huruf dari gambar halaman (offline), dipakai kalau teks PDF nggak bisa diambil.
+const figMark = '\u0001FIG';
+
+/// Baca huruf dari gambar halaman (offline), plus potong gambar/denah di halaman itu.
 class PageOcr {
   PageOcr(this.path);
   final String path;
   px.PdfDocument? _doc;
   final _rec = tr.TextRecognizer(script: tr.TextRecognitionScript.latin);
   File? _cacheFile;
+  String _dir = '';
   Map<String, dynamic> _cache = {};
 
   Future<void> init() async {
     final dir = await getApplicationDocumentsDirectory();
+    _dir = dir.path;
     _cacheFile = File('${dir.path}${Platform.pathSeparator}ocr_${path.hashCode.abs()}.json');
     if (await _cacheFile!.exists()) {
       try {
         _cache = jsonDecode(await _cacheFile!.readAsString()) as Map<String, dynamic>;
       } catch (_) {}
     }
+    if (_cache['v'] != 2) _cache = {'v': 2}; // versi lama belum ada gambar
   }
 
   List<String>? cached(int i) {
@@ -134,11 +141,110 @@ class PageOcr {
     final f = File('${tmp.path}${Platform.pathSeparator}leaf_ocr.jpg');
     await f.writeAsBytes(img.bytes, flush: true);
     final res = await _rec.processImage(tr.InputImage.fromFilePath(f.path));
-    final paras = <String>[
+
+    // ukuran gambar asli (piksel) untuk skala kotak teks
+    final codec = await ui.instantiateImageCodec(img.bytes, targetWidth: 300);
+    final frame = await codec.getNextFrame();
+    final small = frame.image;
+    final sw = small.width, sh = small.height;
+    final k = sw / (img.width ?? (page.width * scale)).toDouble();
+    final raw = await small.toByteData(format: ui.ImageByteFormat.rawRgba);
+    small.dispose();
+
+    // blok teks badan (bukan label kecil) menutup baris-barisnya
+    final blocks = [
       for (final b in res.blocks)
-        if (!RegExp(r'^\d{1,4}$').hasMatch(b.text.trim()))
-          _joinLines([for (final l in b.lines) l.text])
-    ].where((e) => e.isNotEmpty).toList();
+        if (!RegExp(r'^\d{1,4}$').hasMatch(b.text.trim())) b
+    ];
+    bool isBody(tr.TextBlock b) =>
+        b.text.trim().length >= 25 || b.boundingBox.width * k > sw * 0.45;
+    final textRow = List<bool>.filled(sh, false);
+    for (final b in blocks.where(isBody)) {
+      final t = (b.boundingBox.top * k - 2).floor().clamp(0, sh - 1);
+      final bt = (b.boundingBox.bottom * k + 2).ceil().clamp(0, sh - 1);
+      for (var y = t; y <= bt; y++) {
+        textRow[y] = true;
+      }
+    }
+
+    // baris yang ada "tinta" tapi bukan teks badan = kandidat gambar
+    final figs = <Rect>[];
+    if (raw != null) {
+      final px0 = (sw * 0.04).floor(), px1 = (sw * 0.96).ceil();
+      bool dark(int x, int y) {
+        final o = (y * sw + x) * 4;
+        final l = raw.getUint8(o) * 0.3 + raw.getUint8(o + 1) * 0.59 + raw.getUint8(o + 2) * 0.11;
+        return l < 170;
+      }
+
+      final ink = List<bool>.generate(sh, (y) {
+        if (textRow[y]) return false;
+        var n = 0;
+        for (var x = px0; x < px1; x++) {
+          if (dark(x, y)) n++;
+        }
+        return n > sw * 0.01;
+      });
+      final gap = (sh * 0.03).round();
+      var y = (sh * 0.03).floor();
+      while (y < sh * 0.97) {
+        if (!ink[y]) {
+          y++;
+          continue;
+        }
+        var end = y, miss = 0, yy = y;
+        while (yy < sh && miss <= gap && !textRow[yy]) {
+          if (ink[yy]) {
+            end = yy;
+            miss = 0;
+          } else {
+            miss++;
+          }
+          yy++;
+        }
+        if (end - y >= sh * 0.08) {
+          var l = sw, r = 0;
+          for (var ry = y; ry <= end; ry++) {
+            for (var x = px0; x < px1; x++) {
+              if (dark(x, ry)) {
+                if (x < l) l = x;
+                if (x > r) r = x;
+              }
+            }
+          }
+          final pad = sw * 0.02;
+          figs.add(Rect.fromLTRB(
+            ((l - pad) / sw).clamp(0.0, 1.0),
+            ((y - pad) / sh).clamp(0.0, 1.0),
+            ((r + pad) / sw).clamp(0.0, 1.0),
+            ((end + pad) / sh).clamp(0.0, 1.0),
+          ));
+        }
+        y = end + 1;
+      }
+    }
+
+    // susun paragraf + gambar sesuai urutan dari atas
+    final items = <({double top, String text})>[];
+    for (final b in blocks) {
+      final cx = b.boundingBox.center.dx * k / sw, cy = b.boundingBox.center.dy * k / sh;
+      if (figs.any((r) => r.contains(Offset(cx, cy)))) continue; // label di dalam denah
+      final t = _joinLines([for (final l in b.lines) l.text]);
+      if (t.isNotEmpty) items.add((top: b.boundingBox.top * k / sh, text: t));
+    }
+    if (figs.isNotEmpty) {
+      final keep = File('$_dir${Platform.pathSeparator}ocrimg_${path.hashCode.abs()}_$i.jpg');
+      await keep.writeAsBytes(img.bytes, flush: true);
+      final ratio = sw / sh;
+      for (final r in figs) {
+        items.add((
+          top: r.top,
+          text: '$figMark|${keep.path}|${r.left}|${r.top}|${r.width}|${r.height}|$ratio',
+        ));
+      }
+    }
+    items.sort((a, b) => a.top.compareTo(b.top));
+    final paras = [for (final it in items) it.text];
     _cache['$i'] = paras;
     await _cacheFile?.writeAsString(jsonEncode(_cache));
     return paras;
@@ -147,6 +253,91 @@ class PageOcr {
   Future<void> close() async {
     await _rec.close();
     await _doc?.close();
+  }
+}
+
+/// Potongan gambar dari halaman asli (denah, ilustrasi, tabel gambar).
+class _Figure extends StatelessWidget {
+  const _Figure(this.spec);
+  final String spec;
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = spec.split('|');
+    if (parts.length < 7) return const SizedBox();
+    final file = File(parts[1]);
+    final l = double.tryParse(parts[2]) ?? 0, t = double.tryParse(parts[3]) ?? 0;
+    final w = (double.tryParse(parts[4]) ?? 1).clamp(0.05, 1.0);
+    final h = (double.tryParse(parts[5]) ?? 1).clamp(0.05, 1.0);
+    final ratio = double.tryParse(parts[6]) ?? 0.7;
+    final ax = w >= 0.999 ? 0.0 : -1 + 2 * l / (1 - w);
+    final ay = h >= 0.999 ? 0.0 : -1 + 2 * t / (1 - h);
+
+    Widget crop(double width) => ClipRect(
+          child: Align(
+            alignment: Alignment(ax.clamp(-1.0, 1.0), ay.clamp(-1.0, 1.0)),
+            widthFactor: w,
+            heightFactor: h,
+            child: Image.file(file,
+                width: width / w, height: width / w / ratio, fit: BoxFit.fill),
+          ),
+        );
+
+    return LayoutBuilder(builder: (context, box) {
+      final width = box.maxWidth;
+      return GestureDetector(
+        onTap: () => showDialog<void>(
+          context: context,
+          builder: (ctx) => Dialog.fullscreen(
+            backgroundColor: Colors.black,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: InteractiveViewer(
+                    maxScale: 6,
+                    child: Center(child: crop(MediaQuery.of(ctx).size.width)),
+                  ),
+                ),
+                Positioned(
+                  top: 12 + MediaQuery.of(ctx).viewPadding.top,
+                  right: 12,
+                  child: IconButton.filledTonal(
+                    tooltip: 'Tutup',
+                    onPressed: () => Navigator.pop(ctx),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(10),
+            boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 10)],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            children: [
+              crop(width),
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.zoom_in_rounded, size: 18, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    });
   }
 }
 
@@ -266,14 +457,17 @@ class _TextReaderPageState extends State<TextReaderPage> {
     while (paras.length < widget.count) {
       paras.add(const []);
     }
-    final missing = [for (var i = 0; i < paras.length; i++) if (paras[i]!.isEmpty) i];
-    if (missing.length > paras.length * 0.3) {
-      // teks PDF nggak kebaca -> pakai OCR dari gambar halaman
+    // halaman tanpa teks / teksnya sedikit (biasanya ada gambar/denah) -> baca dari gambar
+    final missing = [
+      for (var i = 0; i < paras.length; i++)
+        if (i >= pages.length || pages[i].trim().length < 150) i
+    ];
+    if (missing.isNotEmpty) {
       try {
         final ocr = PageOcr(widget.path);
         await ocr.init();
         _ocr = ocr;
-        _usingOcr = true;
+        _usingOcr = missing.length > paras.length * 0.3;
         for (final i in missing) {
           paras[i] = ocr.cached(i);
         }
@@ -485,7 +679,9 @@ class _TextReaderPageState extends State<TextReaderPage> {
                 for (final p in paras[i]!)
                   Padding(
                     padding: EdgeInsets.only(bottom: t.size * 0.8),
-                    child: _isHeading(p)
+                    child: p.startsWith(figMark)
+                        ? _Figure(p)
+                        : _isHeading(p)
                         ? Text(p, textAlign: TextAlign.center, style: head)
                         : Text(p,
                             textAlign: t.justify ? TextAlign.justify : TextAlign.start,
