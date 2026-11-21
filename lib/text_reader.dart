@@ -65,6 +65,7 @@ List<String> toParagraphs(String raw) {
       continue;
     }
     if (RegExp(r'^\d{1,4}$').hasMatch(l)) continue; // nomor halaman
+    if (buf.isNotEmpty && _startsNew(l)) flush();
     if (buf.endsWith('-') && RegExp(r'^[a-z]').hasMatch(l)) {
       buf = buf.substring(0, buf.length - 1) + l;
     } else {
@@ -79,18 +80,33 @@ List<String> toParagraphs(String raw) {
 }
 
 /// Paragraf dari satu blok OCR (baris-baris dalam blok disambung).
-String _joinLines(List<String> lines) {
+/// "Aku: ...", "Kurihara-san : ..." -> nama pembicara + isi.
+final speakerRe = RegExp(
+    r"^([A-ZÀ-Ý][A-Za-zÀ-ÿ\-'.]*(?:[ \-][A-Za-zÀ-ÿ\-'.]+){0,2})\s*[:：]\s*(.+)$");
+
+/// Baris yang harus jadi paragraf baru (dialog).
+bool _startsNew(String l) =>
+    speakerRe.hasMatch(l) || RegExp(r'^[“"‘«—–-]\s?\S').hasMatch(l);
+
+/// Paragraf dari baris-baris satu blok; dialog dipecah per pembicara.
+List<String> _joinBlock(List<String> lines) {
+  final out = <String>[];
   var buf = '';
   for (final raw in lines) {
     final l = raw.trim();
     if (l.isEmpty) continue;
+    if (buf.isNotEmpty && _startsNew(l)) {
+      out.add(buf);
+      buf = '';
+    }
     if (buf.endsWith('-') && RegExp(r'^[a-z]').hasMatch(l)) {
       buf = buf.substring(0, buf.length - 1) + l;
     } else {
       buf = buf.isEmpty ? l : '$buf $l';
     }
   }
-  return buf;
+  if (buf.isNotEmpty) out.add(buf);
+  return out;
 }
 
 /// Baca huruf dari gambar halaman (offline), dipakai kalau teks PDF nggak bisa diambil.
@@ -115,7 +131,7 @@ class PageOcr {
         _cache = jsonDecode(await _cacheFile!.readAsString()) as Map<String, dynamic>;
       } catch (_) {}
     }
-    if (_cache['v'] != 2) _cache = {'v': 2}; // versi lama belum ada gambar
+    if (_cache['v'] != 3) _cache = {'v': 3}; // versi lama: belum ada gambar / dialog
   }
 
   List<String>? cached(int i) {
@@ -229,8 +245,10 @@ class PageOcr {
     for (final b in blocks) {
       final cx = b.boundingBox.center.dx * k / sw, cy = b.boundingBox.center.dy * k / sh;
       if (figs.any((r) => r.contains(Offset(cx, cy)))) continue; // label di dalam denah
-      final t = _joinLines([for (final l in b.lines) l.text]);
-      if (t.isNotEmpty) items.add((top: b.boundingBox.top * k / sh, text: t));
+      final parts = _joinBlock([for (final l in b.lines) l.text]);
+      for (var j = 0; j < parts.length; j++) {
+        items.add((top: b.boundingBox.top * k / sh + j * 1e-6, text: parts[j]));
+      }
     }
     if (figs.isNotEmpty) {
       final keep = File('$_dir${Platform.pathSeparator}ocrimg_${path.hashCode.abs()}_$i.jpg');
@@ -339,6 +357,20 @@ class _Figure extends StatelessWidget {
       );
     });
   }
+}
+
+bool _isDialog(String p) => !p.startsWith(figMark) && _startsNew(p);
+
+/// Nama pembicara tebal, isi menjorok rapi di bawahnya.
+Widget _speaker(String p, TextStyle body) {
+  final m = speakerRe.firstMatch(p)!;
+  return Text.rich(
+    TextSpan(children: [
+      TextSpan(text: '${m.group(1)}: ', style: body.copyWith(fontWeight: FontWeight.w700)),
+      TextSpan(text: m.group(2)),
+    ]),
+    style: body,
+  );
 }
 
 bool _isHeading(String p) =>
@@ -678,9 +710,12 @@ class _TextReaderPageState extends State<TextReaderPage> {
                 else
                 for (final p in paras[i]!)
                   Padding(
-                    padding: EdgeInsets.only(bottom: t.size * 0.8),
+                    padding: EdgeInsets.only(
+                        bottom: _isDialog(p) ? t.size * 0.45 : t.size * 0.8),
                     child: p.startsWith(figMark)
                         ? _Figure(p)
+                        : speakerRe.hasMatch(p)
+                        ? _speaker(p, body)
                         : _isHeading(p)
                         ? Text(p, textAlign: TextAlign.center, style: head)
                         : Text(p,
