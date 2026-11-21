@@ -122,6 +122,17 @@ ThemeData leafTheme(Brightness b) {
 const noteColors = <int>[0xFFFFE27A, 0xFFFFA8BE, 0xFFA9EBC2, 0xFF9FD4FF];
 const noteInk = Color(0xFF2B2614);
 
+const penColors = <int>[
+  0xFF1B1F1C, // hitam
+  0xFF1E5BD8, // biru
+  0xFFD23B3B, // merah
+  0xFF1F8A4C, // hijau
+  0xFF7A3FD1, // ungu
+  0xFFFFFFFF, // putih (buat kertas gelap)
+];
+
+const penWidths = <double>[1.0, 1.7, 2.6]; // tipis, sedang, tebal
+
 const highlightColors = <int>[
   0xFFFFD54F, // kuning
   0xFF7CE38B, // hijau
@@ -193,13 +204,20 @@ class Note {
 
 /// Coretan stylus/jari. Titik disimpan relatif (0..1) terhadap halaman.
 class InkStroke {
-  InkStroke({required this.page, required this.tool, this.color, List<Offset>? pts, List<int>? ts})
+  InkStroke(
+      {required this.page,
+      required this.tool,
+      this.color,
+      this.width,
+      List<Offset>? pts,
+      List<int>? ts})
       : pts = pts ?? [],
         ts = ts ?? [];
 
   final int page;
   final String tool; // 'pen' | 'hl'
-  final int? color; // warna stabilo
+  final int? color; // warna pena / stabilo
+  final double? width; // ketebalan pena (pengali)
   final List<Offset> pts;
   final List<int> ts;
 
@@ -212,6 +230,7 @@ class InkStroke {
         'page': page,
         'tool': tool,
         if (color != null) 'c': color,
+        if (width != null) 'w': width,
         'p': [for (final o in pts) ...[o.dx, o.dy]],
         't': ts,
       };
@@ -226,6 +245,7 @@ class InkStroke {
       page: (j['page'] as num).toInt(),
       tool: '${j['tool']}',
       color: (j['c'] as num?)?.toInt(),
+      width: (j['w'] as num?)?.toDouble(),
       pts: pts,
       ts: ts,
     );
