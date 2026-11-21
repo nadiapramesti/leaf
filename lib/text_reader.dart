@@ -5,7 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart' as tr;
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfx/pdfx.dart' as px;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 
 import 'store.dart';
@@ -73,6 +75,79 @@ List<String> toParagraphs(String raw) {
   }
   flush();
   return paras;
+}
+
+/// Paragraf dari satu blok OCR (baris-baris dalam blok disambung).
+String _joinLines(List<String> lines) {
+  var buf = '';
+  for (final raw in lines) {
+    final l = raw.trim();
+    if (l.isEmpty) continue;
+    if (buf.endsWith('-') && RegExp(r'^[a-z]').hasMatch(l)) {
+      buf = buf.substring(0, buf.length - 1) + l;
+    } else {
+      buf = buf.isEmpty ? l : '$buf $l';
+    }
+  }
+  return buf;
+}
+
+/// Baca huruf dari gambar halaman (offline), dipakai kalau teks PDF nggak bisa diambil.
+class PageOcr {
+  PageOcr(this.path);
+  final String path;
+  px.PdfDocument? _doc;
+  final _rec = tr.TextRecognizer(script: tr.TextRecognitionScript.latin);
+  File? _cacheFile;
+  Map<String, dynamic> _cache = {};
+
+  Future<void> init() async {
+    final dir = await getApplicationDocumentsDirectory();
+    _cacheFile = File('${dir.path}${Platform.pathSeparator}ocr_${path.hashCode.abs()}.json');
+    if (await _cacheFile!.exists()) {
+      try {
+        _cache = jsonDecode(await _cacheFile!.readAsString()) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+  }
+
+  List<String>? cached(int i) {
+    final v = _cache['$i'];
+    return v == null ? null : (v as List).map((e) => '$e').toList();
+  }
+
+  Future<List<String>> read(int i) async {
+    final hit = cached(i);
+    if (hit != null) return hit;
+    _doc ??= await px.PdfDocument.openFile(path);
+    final page = await _doc!.getPage(i + 1);
+    final scale = 1800 / page.width;
+    final img = await page.render(
+      width: page.width * scale,
+      height: page.height * scale,
+      format: px.PdfPageImageFormat.jpeg,
+      backgroundColor: '#FFFFFF',
+    );
+    await page.close();
+    if (img == null) return const [];
+    final tmp = await getTemporaryDirectory();
+    final f = File('${tmp.path}${Platform.pathSeparator}leaf_ocr.jpg');
+    await f.writeAsBytes(img.bytes, flush: true);
+    final res = await _rec.processImage(tr.InputImage.fromFilePath(f.path));
+    final paras = <String>[
+      for (final b in res.blocks)
+        if (!RegExp(r'^\d{1,4}$').hasMatch(b.text.trim()))
+          _joinLines([for (final l in b.lines) l.text])
+    ].where((e) => e.isNotEmpty).toList();
+    _cache['$i'] = paras;
+    await _cacheFile?.writeAsString(jsonEncode(_cache));
+    return paras;
+  }
+
+  Future<void> close() async {
+    await _rec.close();
+    await _doc?.close();
+  }
 }
 
 bool _isHeading(String p) =>
@@ -153,7 +228,11 @@ class TextReaderPage extends StatefulWidget {
 }
 
 class _TextReaderPageState extends State<TextReaderPage> {
-  List<List<String>>? _paras;
+  List<List<String>?>? _paras; // null per halaman = belum dibaca (OCR)
+  PageOcr? _ocr;
+  final List<int> _queue = [];
+  bool _ocrBusy = false;
+  bool _usingOcr = false;
   String? _error;
   bool _ui = true;
   late int _visible = widget.start;
@@ -171,27 +250,66 @@ class _TextReaderPageState extends State<TextReaderPage> {
   @override
   void dispose() {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _ocr?.close();
     _prefs.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
+    List<String> pages;
     try {
-      final pages = await loadPageTexts(widget.path);
-      final paras = pages.map(toParagraphs).toList();
-      if (!mounted) return;
-      final total = paras.fold<int>(0, (a, p) => a + p.length);
-      setState(() {
-        if (total == 0) {
-          _error = 'PDF ini isinya gambar hasil scan, jadi teksnya nggak bisa diambil.';
-        } else {
-          _paras = paras;
-          _start = widget.start.clamp(0, paras.length - 1);
-        }
-      });
+      pages = await loadPageTexts(widget.path);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Teks PDF ini nggak bisa dibaca.');
+      pages = List.filled(widget.count, '');
     }
+    final paras = <List<String>?>[for (final t in pages) toParagraphs(t)];
+    while (paras.length < widget.count) {
+      paras.add(const []);
+    }
+    final missing = [for (var i = 0; i < paras.length; i++) if (paras[i]!.isEmpty) i];
+    if (missing.length > paras.length * 0.3) {
+      // teks PDF nggak kebaca -> pakai OCR dari gambar halaman
+      try {
+        final ocr = PageOcr(widget.path);
+        await ocr.init();
+        _ocr = ocr;
+        _usingOcr = true;
+        for (final i in missing) {
+          paras[i] = ocr.cached(i);
+        }
+      } catch (_) {
+        if (mounted) setState(() => _error = 'Teks PDF ini nggak bisa dibaca.');
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _paras = paras;
+      _start = widget.start.clamp(0, paras.length - 1);
+    });
+  }
+
+  void _want(int i) {
+    final paras = _paras;
+    if (_ocr == null || paras == null || paras[i] != null || _queue.contains(i)) return;
+    _queue.add(i);
+    _pump();
+  }
+
+  Future<void> _pump() async {
+    if (_ocrBusy || _queue.isEmpty || _ocr == null) return;
+    _ocrBusy = true;
+    // dahulukan halaman paling dekat dengan yang sedang dibaca
+    _queue.sort((a, b) => (a - _visible).abs().compareTo((b - _visible).abs()));
+    final i = _queue.removeAt(0);
+    try {
+      final res = await _ocr!.read(i);
+      if (mounted) setState(() => _paras![i] = res);
+    } catch (_) {
+      if (mounted) setState(() => _paras![i] = const []);
+    }
+    _ocrBusy = false;
+    if (mounted) _pump();
   }
 
   void _toggleUi() {
@@ -242,8 +360,16 @@ class _TextReaderPageState extends State<TextReaderPage> {
                       onPressed: _exit,
                       icon: const Icon(Icons.arrow_back_rounded),
                     ),
-                    title: Text('Hal ${_visible + 1} dari ${widget.count}',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    title: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Hal ${_visible + 1} dari ${widget.count}',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                        if (_usingOcr)
+                          Text('Teks dibaca dari gambar, bisa ada salah huruf',
+                              style: TextStyle(fontSize: 11, color: c.muted)),
+                      ],
+                    ),
                     actions: [
                       Padding(
                         padding: const EdgeInsets.only(right: 12),
@@ -326,7 +452,37 @@ class _TextReaderPageState extends State<TextReaderPage> {
                   ],
                 ),
                 const SizedBox(height: 14),
-                for (final p in paras[i])
+                if (paras[i] == null)
+                  Builder(builder: (_) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) => _want(i));
+                    return SizedBox(
+                      height: 320,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2.4, color: c.muted),
+                            ),
+                            const SizedBox(height: 10),
+                            Text('Membaca halaman ${i + 1}…',
+                                style: TextStyle(color: c.muted, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                    );
+                  })
+                else if (paras[i]!.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Text('(halaman ini nggak ada teksnya)',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: c.muted, fontStyle: FontStyle.italic)),
+                  )
+                else
+                for (final p in paras[i]!)
                   Padding(
                     padding: EdgeInsets.only(bottom: t.size * 0.8),
                     child: _isHeading(p)
