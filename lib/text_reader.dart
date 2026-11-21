@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -65,6 +66,12 @@ List<String> toParagraphs(String raw) {
       continue;
     }
     if (RegExp(r'^\d{1,4}$').hasMatch(l)) continue; // nomor halaman
+    if (RegExp(r'^\*{1,3}\s*\S').hasMatch(l) && lines.indexOf(l) > lines.length * 0.6) {
+      flush();
+      final m = footRe.firstMatch(l);
+      if (m != null) paras.add('$fnMark|${normMark(m.group(1)!)}|${m.group(2)!.trim()}');
+      continue;
+    }
     if (buf.isNotEmpty && _startsNew(l)) flush();
     if (buf.endsWith('-') && RegExp(r'^[a-z]').hasMatch(l)) {
       buf = buf.substring(0, buf.length - 1) + l;
@@ -90,6 +97,15 @@ bool _startsNew(String l) =>
 
 /// Baca huruf dari gambar halaman (offline), dipakai kalau teks PDF nggak bisa diambil.
 const figMark = '\u0001FIG';
+const fnMark = '\u0002FN';
+
+/// "1 Ryokan: penginapan…", "* Onsen: …", "¹ …"
+final footRe = RegExp(r'^(\*{1,3}|\d{1,2}|[¹²³⁴⁵⁶⁷⁸⁹⁰]+)[\s.)]*(\S.*)$');
+
+String normMark(String m) {
+  const sup = {'¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9', '⁰': '0'};
+  return m.split('').map((c) => sup[c] ?? c).join();
+}
 
 /// Baca huruf dari gambar halaman (offline), plus potong gambar/denah di halaman itu.
 class PageOcr {
@@ -110,7 +126,7 @@ class PageOcr {
         _cache = jsonDecode(await _cacheFile!.readAsString()) as Map<String, dynamic>;
       } catch (_) {}
     }
-    if (_cache['v'] != 4) _cache = {'v': 4}; // versi lama: belum ada gambar / dialog
+    if (_cache['v'] != 5) _cache = {'v': 5}; // versi lama: belum ada gambar / dialog
   }
 
   List<String>? cached(int i) {
@@ -260,11 +276,35 @@ class PageOcr {
     }
     closeRow();
 
-    // baris -> paragraf
+    // catatan kaki: baris kecil di bawah halaman yang diawali angka / bintang
+    final body = <({Rect r, String t})>[];
+    final notes = <({String mark, String text})>[];
     if (rows.isNotEmpty) {
-      final minLeft = rows.map((r) => r.r.left).reduce((a, b) => a < b ? a : b);
-      final maxRight = rows.map((r) => r.r.right).reduce((a, b) => a > b ? a : b);
-      final lineH = rows.map((r) => r.r.height).reduce((a, b) => a + b) / rows.length;
+      final hs = rows.map((r) => r.r.height).toList()..sort();
+      final med = hs[hs.length ~/ 2];
+      var inFn = false;
+      for (final row in rows) {
+        final small = row.r.height < med * 0.88;
+        final m = footRe.firstMatch(row.t);
+        if (row.r.top > 0.66 && small && m != null) {
+          inFn = true;
+          notes.add((mark: normMark(m.group(1)!), text: m.group(2)!.trim()));
+          continue;
+        }
+        if (inFn && small && notes.isNotEmpty) {
+          final last = notes.removeLast();
+          notes.add((mark: last.mark, text: '${last.text} ${row.t}'));
+          continue;
+        }
+        body.add(row);
+      }
+    }
+
+    // baris -> paragraf
+    if (body.isNotEmpty) {
+      final minLeft = body.map((r) => r.r.left).reduce((a, b) => a < b ? a : b);
+      final maxRight = body.map((r) => r.r.right).reduce((a, b) => a > b ? a : b);
+      final lineH = body.map((r) => r.r.height).reduce((a, b) => a + b) / body.length;
       var buf = '';
       var bufTop = 0.0;
       var speaker = false;
@@ -275,7 +315,7 @@ class PageOcr {
         buf = '';
       }
 
-      for (final row in rows) {
+      for (final row in body) {
         final t = row.t;
         var newPara = buf.isEmpty || _startsNew(t);
         if (!newPara && prev != null) {
@@ -300,6 +340,10 @@ class PageOcr {
       }
       flush();
     }
+    for (var j = 0; j < notes.length; j++) {
+      items.add((top: 5.0 + j, text: '$fnMark|${notes[j].mark}|${notes[j].text}'));
+    }
+
     if (figs.isNotEmpty) {
       final keep = File('$_dir${Platform.pathSeparator}ocrimg_${path.hashCode.abs()}_$i.jpg');
       await keep.writeAsBytes(img.bytes, flush: true);
@@ -409,15 +453,15 @@ class _Figure extends StatelessWidget {
   }
 }
 
-bool _isDialog(String p) => !p.startsWith(figMark) && _startsNew(p);
+bool _isDialog(String p) => !p.startsWith(figMark) && !p.startsWith(fnMark) && _startsNew(p);
 
 /// Nama pembicara tebal, isi menjorok rapi di bawahnya.
-Widget _speaker(String p, TextStyle body) {
+Widget _speaker(String p, TextStyle body, List<InlineSpan> Function(String) rich) {
   final m = speakerRe.firstMatch(p)!;
   return Text.rich(
     TextSpan(children: [
       TextSpan(text: '${m.group(1)}: ', style: body.copyWith(fontWeight: FontWeight.w700)),
-      TextSpan(text: m.group(2)),
+      ...rich(m.group(2)!),
     ]),
     style: body,
   );
@@ -758,20 +802,22 @@ class _TextReaderPageState extends State<TextReaderPage> {
                         style: TextStyle(color: c.muted, fontStyle: FontStyle.italic)),
                   )
                 else
-                for (final p in paras[i]!)
+                for (final p in paras[i]!.where((p) => !p.startsWith(fnMark)))
                   Padding(
                     padding: EdgeInsets.only(
                         bottom: _isDialog(p) ? t.size * 0.45 : t.size * 0.8),
                     child: p.startsWith(figMark)
                         ? _Figure(p)
                         : speakerRe.hasMatch(p)
-                        ? _speaker(p, body)
+                        ? _speaker(p, body, (x) => _rich(x, body, notesOf(i), c.muted))
                         : _isHeading(p)
                         ? Text(p, textAlign: TextAlign.center, style: head)
-                        : Text(p,
+                        : Text.rich(
+                            TextSpan(children: _rich(p, body, notesOf(i), c.muted)),
                             textAlign: t.justify ? TextAlign.justify : TextAlign.start,
                             style: body),
                   ),
+                if (notesOf(i).isNotEmpty) _footBox(notesOf(i), body, c),
               ],
             ),
           );
@@ -807,6 +853,146 @@ class _TextReaderPageState extends State<TextReaderPage> {
           ),
         );
       },
+    );
+  }
+
+  // ---------------------------------------------------------------- catatan kaki & link
+
+  Map<String, String> notesOf(int i) {
+    final out = <String, String>{};
+    for (final p in _paras?[i] ?? const <String>[]) {
+      if (!p.startsWith(fnMark)) continue;
+      final parts = p.split('|');
+      if (parts.length >= 3) out[parts[1]] = parts.sublist(2).join('|');
+    }
+    return out;
+  }
+
+  static final _tokRe = RegExp(
+      r'([\w.+\-]+@[\w\-]+\.[\w.\-]*\w)'
+      r'|((?:https?://|www\.)[^\s)”"]+)'
+      r'|([¹²³⁴⁵⁶⁷⁸⁹⁰]+)'
+      r'|(?<=[A-Za-zÀ-ÿ)\]”"’])(\d{1,2}|\*{1,3})(?=[\s.,;:!?”"’)]|$)');
+
+  List<InlineSpan> _rich(String text, TextStyle base, Map<String, String> notes, Color muted) {
+    final spans = <InlineSpan>[];
+    var last = 0;
+    final accent = Pal.of(context).accent;
+    for (final m in _tokRe.allMatches(text)) {
+      if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start)));
+      final link = m.group(1) ?? m.group(2);
+      if (link != null) {
+        spans.add(TextSpan(
+          text: link,
+          style: base.copyWith(
+              color: accent, decoration: TextDecoration.underline, decorationColor: accent),
+          recognizer: TapGestureRecognizer()..onTap = () => _copy(link),
+        ));
+      } else {
+        final key = normMark((m.group(3) ?? m.group(4))!);
+        final note = notes[key];
+        if (note == null) {
+          spans.add(TextSpan(text: m.group(0)));
+        } else {
+          spans.add(WidgetSpan(
+            alignment: PlaceholderAlignment.top,
+            child: GestureDetector(
+              onTap: () => _showNote(key, note, base),
+              child: Container(
+                margin: const EdgeInsets.only(left: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(key,
+                    style: TextStyle(
+                        fontSize: (base.fontSize ?? 18) * 0.62,
+                        fontWeight: FontWeight.w800,
+                        color: accent,
+                        height: 1.1)),
+              ),
+            ),
+          ));
+        }
+      }
+      last = m.end;
+    }
+    if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
+    return spans;
+  }
+
+  void _copy(String s) {
+    Clipboard.setData(ClipboardData(text: s));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$s disalin'), behavior: SnackBarBehavior.floating));
+  }
+
+  void _showNote(String key, String note, TextStyle base) {
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      builder: (ctx) {
+        final p = Pal.of(ctx);
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 0, 20, 24 + MediaQuery.of(ctx).viewPadding.bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                        color: p.accentSoft, borderRadius: BorderRadius.circular(8)),
+                    child: Text(key,
+                        style: TextStyle(fontWeight: FontWeight.w800, color: p.onAccentSoft)),
+                  ),
+                  const SizedBox(width: 10),
+                  Text('Catatan kaki',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: p.text)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(note, style: base.copyWith(color: p.text, fontSize: 17)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _footBox(Map<String, String> notes, TextStyle body, ({Color bg, Color fg, Color muted}) c) {
+    final small = body.copyWith(fontSize: (body.fontSize ?? 18) * 0.82, height: 1.45);
+    return Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 8),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: c.muted.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border(left: BorderSide(color: c.muted.withValues(alpha: 0.5), width: 3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('CATATAN KAKI',
+              style: TextStyle(
+                  fontSize: 11, letterSpacing: 1.2, fontWeight: FontWeight.w700, color: c.muted)),
+          const SizedBox(height: 8),
+          for (final e in notes.entries)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: '${e.key}  ', style: small.copyWith(fontWeight: FontWeight.w800)),
+                  ..._rich(e.value, small, const {}, c.muted),
+                ]),
+                style: small,
+              ),
+            ),
+        ],
+      ),
     );
   }
 
