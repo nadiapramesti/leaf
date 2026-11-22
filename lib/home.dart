@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
+import 'backup.dart';
 import 'extras.dart';
 import 'reader.dart';
 import 'store.dart';
@@ -22,6 +25,126 @@ class _HomePageState extends State<HomePage> {
   String? _bookFilter;
   String _noteQuery = '';
   int _view = Store.sp.getInt('shelf_view') ?? 0; // 0 kecil, 1 besar, 2 daftar
+  StreamSubscription<List<SharedMediaFile>>? _shareSub;
+
+  @override
+  void initState() {
+    super.initState();
+    // "Buka dengan Leaf" / "Bagikan ke Leaf" dari WA, Files, Drive
+    try {
+      _shareSub = ReceiveSharingIntent.instance.getMediaStream().listen(_onShared, onError: (_) {});
+      ReceiveSharingIntent.instance.getInitialMedia().then((files) {
+        _onShared(files);
+        ReceiveSharingIntent.instance.reset();
+      });
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _shareSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _onShared(List<SharedMediaFile> files) async {
+    String? first;
+    for (final f in files) {
+      final isPdf = f.path.toLowerCase().endsWith('.pdf') ||
+          (f.mimeType ?? '').contains('pdf');
+      if (!isPdf) continue;
+      try {
+        final dest = await Store.importPdf(f.path);
+        first ??= dest;
+      } catch (_) {}
+    }
+    if (first == null || !mounted) return;
+    setState(() => _tab = 0);
+    await _open(first);
+  }
+
+  Future<void> _moreMenu() async {
+    final act = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      builder: (ctx) {
+        final p = Pal.of(ctx);
+        Widget item(String v, IconData icon, String title, String sub) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: FilledButton.tonal(
+                onPressed: () => Navigator.pop(ctx, v),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(68),
+                  alignment: Alignment.centerLeft,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(icon, size: 26),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title,
+                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                          Text(sub, style: const TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 0, 20, 14 + MediaQuery.of(ctx).viewPadding.bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('Cadangan',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: p.text)),
+              const SizedBox(height: 6),
+              Text('Simpan semua note, coretan, tab, dan progres ke satu file (bisa ke Drive).',
+                  style: TextStyle(color: p.muted, height: 1.4)),
+              const SizedBox(height: 16),
+              item('export', Icons.cloud_upload_outlined, 'Buat cadangan',
+                  'Simpan file .json ke HP atau Google Drive'),
+              item('import', Icons.settings_backup_restore_rounded, 'Pulihkan cadangan',
+                  'Ambil lagi dari file cadangan'),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || act == null) return;
+    final m = ScaffoldMessenger.of(context);
+    if (act == 'export') {
+      try {
+        final path = await Backup.export();
+        if (path != null) {
+          m.showSnackBar(const SnackBar(content: Text('Cadangan tersimpan')));
+        }
+      } catch (_) {
+        m.showSnackBar(const SnackBar(content: Text('Gagal menyimpan cadangan')));
+      }
+    } else {
+      try {
+        final r = await Backup.restore();
+        if (r == null || !mounted) return;
+        setState(() {});
+        final miss = r.missing.isEmpty
+            ? ''
+            : '. ${r.missing.length} buku belum ada di rak, tambah PDF-nya dulu lalu pulihkan lagi';
+        m.showSnackBar(SnackBar(
+          content: Text('${r.books} buku dipulihkan$miss'),
+          duration: const Duration(seconds: 5),
+        ));
+      } catch (_) {
+        m.showSnackBar(const SnackBar(content: Text('File itu bukan cadangan Leaf')));
+      }
+    }
+  }
   bool _busy = false;
 
   Future<void> _open(String path, {int? page}) async {
@@ -307,6 +430,14 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
             const SizedBox(width: 10),
+            IconButton.filledTonal(
+              tooltip: 'Cadangan',
+              iconSize: 22,
+              style: IconButton.styleFrom(minimumSize: const Size(52, 52)),
+              onPressed: _moreMenu,
+              icon: const Icon(Icons.cloud_sync_outlined),
+            ),
+            const SizedBox(width: 8),
             IconButton.filledTonal(
               tooltip: dark ? 'Mode terang' : 'Mode gelap',
               iconSize: 22,

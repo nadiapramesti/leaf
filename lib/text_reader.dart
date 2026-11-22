@@ -6,12 +6,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart' as tr;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart' as px;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 
+import 'lookup.dart';
 import 'store.dart';
 
 // ------------------------------------------------------------------ ambil teks
@@ -570,6 +572,19 @@ class _TextReaderPageState extends State<TextReaderPage> {
   final Map<int, GlobalKey> _keys = {};
   final _centerKey = UniqueKey();
 
+  // dengerin buku (text-to-speech)
+  FlutterTts? _tts;
+  bool _player = false;
+  bool _speaking = false;
+  int _ttsPage = 0;
+  int _ttsPara = 0;
+  final _ttsKey = GlobalKey();
+  double _rate = Store.sp.getDouble('tts_rate') ?? 0.5;
+  String _ttsLang = Store.sp.getString('tts_lang') ?? 'id-ID';
+
+  // arti kata
+  String _selection = '';
+
   @override
   void initState() {
     super.initState();
@@ -579,6 +594,7 @@ class _TextReaderPageState extends State<TextReaderPage> {
   @override
   void dispose() {
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _tts?.stop();
     _ocr?.close();
     _prefs.dispose();
     super.dispose();
@@ -703,6 +719,11 @@ class _TextReaderPageState extends State<TextReaderPage> {
                       ],
                     ),
                     actions: [
+                      IconButton(
+                        tooltip: 'Dengerin buku',
+                        onPressed: _openPlayer,
+                        icon: Icon(_speaking ? Icons.graphic_eq_rounded : Icons.headphones_rounded),
+                      ),
                       Padding(
                         padding: const EdgeInsets.only(right: 12),
                         child: FilledButton.tonalIcon(
@@ -715,6 +736,7 @@ class _TextReaderPageState extends State<TextReaderPage> {
                   )
                 : null,
             body: _body(c),
+            bottomNavigationBar: _player ? _playerBar() : null,
           ),
         );
       },
@@ -814,10 +836,17 @@ class _TextReaderPageState extends State<TextReaderPage> {
                         style: TextStyle(color: c.muted, fontStyle: FontStyle.italic)),
                   )
                 else
-                for (final p in paras[i]!.where((p) => !p.startsWith(fnMark)))
-                  Padding(
-                    padding: EdgeInsets.only(
+                for (final (j, p) in paras[i]!.where((p) => !p.startsWith(fnMark)).indexed)
+                  Container(
+                    key: _speaking && i == _ttsPage && j == _ttsPara ? _ttsKey : null,
+                    margin: EdgeInsets.only(
                         bottom: _isDialog(p) ? t.size * 0.45 : t.size * 0.8),
+                    decoration: _speaking && i == _ttsPage && j == _ttsPara
+                        ? BoxDecoration(
+                            color: Pal.of(context).accent.withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(8),
+                          )
+                        : null,
                     child: p.startsWith(figMark)
                         ? _Figure(p)
                         : speakerRe.hasMatch(p)
@@ -840,7 +869,23 @@ class _TextReaderPageState extends State<TextReaderPage> {
             _updateVisible();
             return false;
           },
-          child: GestureDetector(
+          child: SelectionArea(
+            onSelectionChanged: (c) => _selection = c?.plainText ?? '',
+            contextMenuBuilder: (ctx, st) => AdaptiveTextSelectionToolbar.buttonItems(
+              anchors: st.contextMenuAnchors,
+              buttonItems: [
+                ContextMenuButtonItem(
+                  label: 'Arti kata',
+                  onPressed: () {
+                    final w = _selection;
+                    st.hideToolbar();
+                    if (w.trim().isNotEmpty) showWordSheet(context, w);
+                  },
+                ),
+                ...st.contextMenuButtonItems,
+              ],
+            ),
+            child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: _toggleUi,
             child: CustomScrollView(
@@ -863,8 +908,171 @@ class _TextReaderPageState extends State<TextReaderPage> {
               ],
             ),
           ),
+          ),
         );
       },
+    );
+  }
+
+  // ---------------------------------------------------------------- dengerin buku
+
+  static const _ttsLangs = {'id-ID': 'Indonesia', 'en-US': 'English', 'ja-JP': '日本語'};
+  static const _rates = {0.38: '0.75×', 0.5: '1×', 0.62: '1.25×', 0.75: '1.5×'};
+
+  Future<FlutterTts> _engine() async {
+    final t = _tts ?? FlutterTts();
+    if (_tts == null) {
+      _tts = t;
+      await t.awaitSpeakCompletion(false);
+      t.setCompletionHandler(() {
+        if (!_speaking || !mounted) return;
+        setState(() => _ttsPara++);
+        _speakNext();
+      });
+      t.setErrorHandler((_) {
+        if (mounted) setState(() => _speaking = false);
+      });
+    }
+    await t.setLanguage(_ttsLang);
+    await t.setSpeechRate(_rate);
+    return t;
+  }
+
+  void _openPlayer() {
+    setState(() {
+      _player = true;
+      if (!_speaking) {
+        _ttsPage = _visible;
+        _ttsPara = 0;
+      }
+    });
+    if (!_speaking) _play();
+  }
+
+  Future<void> _play() async {
+    setState(() => _speaking = true);
+    await _engine();
+    _speakNext();
+  }
+
+  Future<void> _pause() async {
+    setState(() => _speaking = false);
+    await _tts?.stop();
+  }
+
+  Future<void> _closePlayer() async {
+    await _pause();
+    setState(() => _player = false);
+  }
+
+  Future<void> _speakNext() async {
+    final paras = _paras;
+    if (!_speaking || paras == null) return;
+    while (_ttsPage < paras.length) {
+      var list = paras[_ttsPage];
+      if (list == null && _ocr != null) {
+        try {
+          list = await _ocr!.read(_ttsPage);
+          if (mounted) setState(() => paras[_ttsPage] = list);
+        } catch (_) {
+          list = const [];
+        }
+      }
+      final body = (list ?? const <String>[]).where((p) => !p.startsWith(fnMark)).toList();
+      while (_ttsPara < body.length && body[_ttsPara].startsWith(figMark)) {
+        _ttsPara++;
+      }
+      if (_ttsPara < body.length) {
+        if (mounted) setState(() {});
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final ctx = _ttsKey.currentContext;
+          if (ctx != null) {
+            Scrollable.ensureVisible(ctx,
+                alignment: 0.3, duration: const Duration(milliseconds: 350));
+          }
+        });
+        final text = body[_ttsPara].replaceAll(RegExp(r'\s+'), ' ');
+        await _tts?.speak(text);
+        return;
+      }
+      _ttsPage++;
+      _ttsPara = 0;
+    }
+    if (mounted) setState(() => _speaking = false);
+  }
+
+  Widget _playerBar() {
+    final p = Pal.of(context);
+    return SafeArea(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        decoration: BoxDecoration(color: p.bg, border: Border(top: BorderSide(color: p.line))),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                IconButton.filled(
+                  tooltip: _speaking ? 'Jeda' : 'Putar',
+                  iconSize: 28,
+                  style: IconButton.styleFrom(minimumSize: const Size(52, 52)),
+                  onPressed: _speaking ? _pause : _play,
+                  icon: Icon(_speaking ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_speaking ? 'Membacakan hal ${_ttsPage + 1}' : 'Dijeda di hal ${_ttsPage + 1}',
+                          style: TextStyle(fontWeight: FontWeight.w700, color: p.text)),
+                      Text(_ttsLangs[_ttsLang] ?? _ttsLang,
+                          style: TextStyle(fontSize: 12, color: p.muted)),
+                    ],
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Bahasa suara',
+                  icon: const Icon(Icons.record_voice_over_outlined),
+                  onSelected: (v) async {
+                    setState(() => _ttsLang = v);
+                    Store.sp.setString('tts_lang', v);
+                    final was = _speaking;
+                    await _pause();
+                    if (was) _play();
+                  },
+                  itemBuilder: (_) => [
+                    for (final e in _ttsLangs.entries)
+                      PopupMenuItem(value: e.key, child: Text(e.value)),
+                  ],
+                ),
+                IconButton(
+                  tooltip: 'Tutup pemutar',
+                  onPressed: _closePlayer,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<double>(
+                showSelectedIcon: false,
+                segments: [
+                  for (final e in _rates.entries)
+                    ButtonSegment(value: e.key, label: Text(e.value)),
+                ],
+                selected: {_rates.containsKey(_rate) ? _rate : 0.5},
+                onSelectionChanged: (s) async {
+                  setState(() => _rate = s.first);
+                  Store.sp.setDouble('tts_rate', s.first);
+                  await _tts?.setSpeechRate(s.first);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

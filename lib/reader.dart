@@ -10,11 +10,12 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'extras.dart';
 import 'sheets.dart';
+import 'search.dart';
 import 'store.dart';
 import 'text_reader.dart';
 import 'turner.dart';
 
-enum Mode { read, pen, highlight }
+enum Mode { read, pen, highlight, eraser }
 
 
 class ReaderPage extends StatefulWidget {
@@ -339,6 +340,22 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     await Store.saveMarks(_path, _marks);
   }
 
+  Future<void> _openSearch() async {
+    final r = await Navigator.push<int>(
+      context,
+      MaterialPageRoute(builder: (_) => BookSearchPage(path: _path, count: _count)),
+    );
+    if (r != null && mounted) _jump(r);
+  }
+
+  Future<void> _openToc() async {
+    final r = await Navigator.push<int>(
+      context,
+      MaterialPageRoute(builder: (_) => TocPage(path: _path, current: _current)),
+    );
+    if (r != null && mounted) _jump(r);
+  }
+
   Future<void> _openText() async {
     final r = await Navigator.push<int>(
       context,
@@ -649,7 +666,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   void _eraseAt(Offset n) {
     final before = _ink.length;
     _ink.removeWhere((k) =>
-        k.page == _current && k.pts.any((p) => (p - n).distance < 0.025));
+        k.page == _current && k.pts.any((p) => (p - n).distance < 0.03));
     if (_ink.length != before) {
       setState(() {});
       _bump();
@@ -662,7 +679,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     // tolak telapak / jari kalau sudah pakai stylus
     if (_stylusSeen && !_isStylus(e)) return;
     if (_live != null) return;
-    if (e.kind == PointerDeviceKind.invertedStylus) {
+    if (e.kind == PointerDeviceKind.invertedStylus || _mode == Mode.eraser) {
       _livePointer = e.pointer;
       _eraseAt(_norm(e.localPosition, s));
       return;
@@ -680,7 +697,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   void _move(PointerMoveEvent e, Size s) {
     if (e.pointer != _livePointer) return;
-    if (e.kind == PointerDeviceKind.invertedStylus) {
+    if (e.kind == PointerDeviceKind.invertedStylus || _mode == Mode.eraser) {
       _eraseAt(_norm(e.localPosition, s));
       return;
     }
@@ -803,6 +820,8 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             tooltip: 'Lainnya',
             icon: const Icon(Icons.more_vert_rounded),
             onSelected: (v) {
+              if (v == 'search') _openSearch();
+              if (v == 'toc') _openToc();
               if (v == 'full') _setFull(true);
               if (v == 'zoom') _openZoom();
               if (v == 'paper') _pickPaper();
@@ -810,6 +829,13 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
               if (v == 'focus') _pickFocus();
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(
+                  value: 'search',
+                  child: ListTile(
+                      leading: Icon(Icons.search_rounded), title: Text('Cari di buku'))),
+              PopupMenuItem(
+                  value: 'toc',
+                  child: ListTile(leading: Icon(Icons.toc_rounded), title: Text('Daftar isi'))),
               PopupMenuItem(
                   value: 'full',
                   child: ListTile(
@@ -1118,6 +1144,10 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
                       value: Mode.highlight,
                       icon: Icon(Icons.border_color_rounded),
                       label: Text('Stabilo')),
+                  ButtonSegment(
+                      value: Mode.eraser,
+                      icon: Icon(Icons.cleaning_services_rounded),
+                      label: Text('Hapus')),
                 ],
                 selected: {_mode},
                 onSelectionChanged: (s) => setState(() => _mode = s.first),
@@ -1131,6 +1161,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             ),
           ],
         ),
+        if (_mode != Mode.eraser) ...[
         const SizedBox(height: 10),
         Wrap(
           alignment: WrapAlignment.center,
@@ -1194,9 +1225,12 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
             ],
           ],
         ),
+        ],
         const SizedBox(height: 6),
         Text(
-          _stylusSeen
+          _mode == Mode.eraser
+              ? 'Gosok coretan yang mau dihapus.'
+              : _stylusSeen
               ? 'Stylus aktif, sentuhan jari diabaikan. Tombol hapus stylus = penghapus.'
               : 'Tulis pakai stylus atau jari. Balik halaman setelah tap Selesai.',
           textAlign: TextAlign.center,
