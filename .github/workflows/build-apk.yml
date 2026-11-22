@@ -70,9 +70,12 @@ jobs:
           if [ -f android/app/build.gradle.kts ]; then
             A=android/app/build.gradle.kts
             grep -q 'isMinifyEnabled = false' $A || sed -i 's/signingConfig = signingConfigs.getByName("debug")/signingConfig = signingConfigs.getByName("debug")\n            isMinifyEnabled = false\n            isShrinkResources = false/' $A
+            # beberapa plugin (receive_sharing_intent) minta compile pakai SDK 37
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 37/' $A
           else
             A=android/app/build.gradle
             grep -q 'minifyEnabled false' $A || sed -i 's/signingConfig signingConfigs.debug/signingConfig signingConfigs.debug\n            minifyEnabled false\n            shrinkResources false/' $A
+            sed -i 's/compileSdk\(Version\)\? flutter.compileSdkVersion/compileSdk 37/' $A
           fi
           cat $A
           # matikan Impeller (crash di sebagian GPU tablet), pakai renderer lama yang stabil

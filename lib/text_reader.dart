@@ -917,7 +917,7 @@ class _TextReaderPageState extends State<TextReaderPage> {
   // ---------------------------------------------------------------- dengerin buku
 
   static const _ttsLangs = {'id-ID': 'Indonesia', 'en-US': 'English', 'ja-JP': '日本語'};
-  static const _rates = {0.38: '0.75×', 0.5: '1×', 0.62: '1.25×', 0.75: '1.5×'};
+  static final _rates = <double, String>{0.38: '0.75×', 0.5: '1×', 0.62: '1.25×', 0.75: '1.5×'};
 
   Future<FlutterTts> _engine() async {
     final t = _tts ?? FlutterTts();
