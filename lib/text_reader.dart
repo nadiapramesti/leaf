@@ -7,12 +7,12 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart' as tr;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfx/pdfx.dart' as px;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 
+import 'fonts.dart';
 import 'lookup.dart';
 import 'store.dart';
 
@@ -780,10 +780,10 @@ class _TextReaderPageState extends State<TextReaderPage> {
     return ValueListenableBuilder<TextPrefs>(
       valueListenable: _prefs,
       builder: (_, t, __) {
-        final body = GoogleFonts.getFont(t.font,
-            fontSize: t.size, height: t.line, color: c.fg);
-        final head = GoogleFonts.getFont(t.font,
-            fontSize: t.size * 1.15, height: 1.3, color: c.fg, fontWeight: FontWeight.w700);
+        final body = Fonts.style(t.font,
+            size: t.size, height: t.line, color: c.fg);
+        final head = Fonts.style(t.font,
+            size: t.size * 1.15, height: 1.3, color: c.fg, weight: FontWeight.w700);
 
         Widget page(int i) {
           final key = _keys.putIfAbsent(i, () => GlobalKey());
@@ -1242,19 +1242,27 @@ class _TextReaderPageState extends State<TextReaderPage> {
                   Text('Atur teks',
                       style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: p.text)),
                   label('Gaya huruf'),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final e in textFonts.entries)
-                        ChoiceChip(
-                          showCheckmark: false,
-                          selected: t.font == e.key,
-                          label: Text(e.value,
-                              style: GoogleFonts.getFont(e.key, fontSize: 15, color: p.text)),
-                          onSelected: (_) => _prefs.value = t.copyWith(font: e.key),
+                  OutlinedButton(
+                    onPressed: () async {
+                      final f = await showFontPicker(ctx, t.font);
+                      if (f != null) _prefs.value = _prefs.value.copyWith(font: f);
+                    },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(56),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(t.font,
+                              overflow: TextOverflow.ellipsis,
+                              style: Fonts.style(t.font, size: 18, color: p.text)),
                         ),
-                    ],
+                        Text('Ganti', style: TextStyle(color: p.accent, fontWeight: FontWeight.w700)),
+                        Icon(Icons.chevron_right_rounded, color: p.accent),
+                      ],
+                    ),
                   ),
                   label('Ukuran huruf · ${t.size.round()}'),
                   Row(

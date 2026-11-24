@@ -147,12 +147,20 @@ const fontFamilies = <String, String>{
   'buku': 'Fraunces',
   'tangan': 'Caveat',
   'tebal': 'Archivo Black',
+  'ketik': 'Special Elite',
+  'bulat': 'Quicksand',
+  'spidol': 'Permanent Marker',
+  'santai': 'Patrick Hand',
 };
 const fontLabels = <String, String>{
   'rapi': 'Rapi',
   'buku': 'Buku',
   'tangan': 'Tulisan',
   'tebal': 'Tebal',
+  'ketik': 'Ketik',
+  'bulat': 'Bulat',
+  'spidol': 'Spidol',
+  'santai': 'Santai',
 };
 
 TextStyle noteStyle(String font, {double size = 13, Color color = noteInk}) {
